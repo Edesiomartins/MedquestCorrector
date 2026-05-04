@@ -15,7 +15,6 @@ from app.services.generator.sheet_layout import (
     CONTINUATION_GAP_BELOW_HEADER,
     DEFAULT_RESPONSE_LINES,
     PAGE_TOP_CONTENT_INSET,
-    PRACTICAL_RESPONSE_LINES,
     QUESTION_TEXT_FONT_NAME,
     QUESTION_TEXT_FONT_SIZE,
     QUESTION_TEXT_BOTTOM_GAP,
@@ -62,6 +61,12 @@ def generate_answer_sheets(
     logo_bytes: bytes | None = None,
     response_lines: int = DEFAULT_RESPONSE_LINES,
     compact_header: bool = True,
+    *,
+    question_spacing: float | None = None,
+    question_title_gap: float | None = None,
+    question_text_bottom_gap: float | None = None,
+    first_response_line_offset: float | None = None,
+    response_bottom_padding: float | None = None,
 ) -> tuple[bytes, dict]:
     """
     Gera PDF com folhas-resposta e o manifesto de layout (coordenadas dos boxes).
@@ -72,6 +77,16 @@ def generate_answer_sheets(
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
     logo = _load_logo(logo_bytes)
+
+    spacing_eff = question_spacing if question_spacing is not None else 4 * mm
+    title_gap_eff = question_title_gap if question_title_gap is not None else QUESTION_TITLE_GAP
+    text_bottom_eff = (
+        question_text_bottom_gap if question_text_bottom_gap is not None else QUESTION_TEXT_BOTTOM_GAP
+    )
+    first_line_eff = (
+        first_response_line_offset if first_response_line_offset is not None else 10 * mm
+    )
+    resp_pad_eff = response_bottom_padding if response_bottom_padding is not None else 3 * mm
 
     all_manifest_pages = []
 
@@ -94,6 +109,11 @@ def generate_answer_sheets(
             logo_bottom_y_after=logo_y_after,
             response_lines=response_lines,
             compact_header=compact_header,
+            question_spacing=question_spacing,
+            question_title_gap=question_title_gap,
+            question_text_bottom_gap=question_text_bottom_gap,
+            first_response_line_offset=first_response_line_offset,
+            response_bottom_padding=response_bottom_padding,
         )
         all_manifest_pages.extend(pages_sim)
 
@@ -110,6 +130,11 @@ def generate_answer_sheets(
             total_pages_for_student=len(pages_sim),
             response_lines=response_lines,
             compact_header=compact_header,
+            question_spacing=spacing_eff,
+            question_title_gap=title_gap_eff,
+            question_text_bottom_gap=text_bottom_eff,
+            first_response_line_offset=first_line_eff,
+            response_bottom_padding=resp_pad_eff,
         )
         c.showPage()
 
@@ -203,6 +228,11 @@ def _draw_sheet(
     total_pages_for_student: int,
     response_lines: int = DEFAULT_RESPONSE_LINES,
     compact_header: bool = True,
+    question_spacing: float,
+    question_title_gap: float,
+    question_text_bottom_gap: float,
+    first_response_line_offset: float,
+    response_bottom_padding: float,
 ):
     margin = 2 * cm
     page_in_student = 0
@@ -286,17 +316,22 @@ def _draw_sheet(
     effective_response_lines = max(1, response_lines)
     response_line_gap = 5 * mm
     response_label_offset = 4 * mm
-    first_response_line_offset = 10 * mm
-    response_bottom_padding = 3 * mm
     answer_area_h = (
         first_response_line_offset
         + (effective_response_lines - 1) * response_line_gap
         + response_bottom_padding
     )
-    spacing = 4 * mm
+    spacing = question_spacing
 
     for q in questions:
-        needed = question_block_height(q.text, answer_area_h, spacing, usable_w)
+        needed = question_block_height(
+            q.text,
+            answer_area_h,
+            spacing,
+            usable_w,
+            title_gap=question_title_gap,
+            text_bottom_gap=question_text_bottom_gap,
+        )
         if y - needed < margin:
             c.showPage()
             current_qr_payload = begin_physical_page()
@@ -318,12 +353,12 @@ def _draw_sheet(
         c.setFont("Helvetica", 8)
         c.drawRightString(w - margin, y, f"(vale {q.max_score} pts)")
 
-        y -= QUESTION_TITLE_GAP
+        y -= question_title_gap
 
         text_lines = wrap_question_text(q.text, usable_w)
         y = _draw_question_text(c, text_lines, margin, y, usable_w)
 
-        y -= QUESTION_TEXT_BOTTOM_GAP
+        y -= question_text_bottom_gap
 
         c.setStrokeColor(colors.Color(0.8, 0.8, 0.8))
         c.setFillColor(colors.Color(0.97, 0.97, 0.97))
@@ -363,6 +398,14 @@ def _load_logo(logo_bytes: bytes | None) -> LogoSpec | None:
     return LogoSpec(image=image, width=float(img_w), height=float(img_h))
 
 
-def practical_answer_sheet_options() -> dict[str, int | bool]:
-    """Parâmetros para folha prática com 2 linhas por questão."""
-    return {"response_lines": PRACTICAL_RESPONSE_LINES, "compact_header": True}
+def practical_answer_sheet_options() -> dict[str, int | bool | float]:
+    """Parâmetros para folha prática: 1 linha de resposta e espaçamentos reduzidos."""
+    return {
+        "response_lines": 1,
+        "compact_header": True,
+        "question_spacing": 2 * mm,
+        "question_title_gap": 3 * mm,
+        "question_text_bottom_gap": 1 * mm,
+        "first_response_line_offset": 7 * mm,
+        "response_bottom_padding": 2 * mm,
+    }

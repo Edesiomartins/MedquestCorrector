@@ -66,7 +66,7 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
 
   const pageTitle = isPracticalMode ? 'Provas Práticas' : 'Provas';
   const pageSubtitle = isPracticalMode
-    ? 'Mesma configuração de provas, com folhas práticas compactas (2 linhas por questão).'
+    ? 'Mesma configuração de provas, com folhas práticas compactas (1 linha de resposta por questão).'
     : 'Gabaritos e questões para correção assistida.';
 
   const handleDownloadSheets = async (examId: string, examName: string, logoFile: File) => {

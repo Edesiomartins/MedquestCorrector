@@ -35,7 +35,8 @@ QUESTION_TEXT_BOTTOM_GAP = 2 * mm
 # Mantido para compatibilidade com imports antigos; o cálculo atual usa o texto real.
 QUESTION_BLOCK_OVERHEAD = QUESTION_TITLE_GAP + (2 * QUESTION_TEXT_LINE_GAP) + QUESTION_TEXT_BOTTOM_GAP
 DEFAULT_RESPONSE_LINES = 5
-PRACTICAL_RESPONSE_LINES = 2
+# Folha prática: uma linha de escrita; valor só para referência (override em practical_answer_sheet_options).
+PRACTICAL_RESPONSE_LINES = 1
 
 
 @dataclass
@@ -134,13 +135,18 @@ def question_block_height(
     answer_area_h: float,
     spacing: float,
     question_text_width: float | None = None,
+    *,
+    title_gap: float | None = None,
+    text_bottom_gap: float | None = None,
 ) -> float:
     """Altura real ocupada por uma questão antes de avançar para a próxima."""
+    tg = title_gap if title_gap is not None else QUESTION_TITLE_GAP
+    tbg = text_bottom_gap if text_bottom_gap is not None else QUESTION_TEXT_BOTTOM_GAP
     text_lines = wrap_question_text(text, question_text_width)
     return (
-        QUESTION_TITLE_GAP
+        tg
         + (len(text_lines) * QUESTION_TEXT_LINE_GAP)
-        + QUESTION_TEXT_BOTTOM_GAP
+        + tbg
         + answer_area_h
         + spacing
     )
@@ -154,6 +160,11 @@ def compute_answer_sheet_pages(
     logo_bottom_y_after: float | None = None,
     response_lines: int = DEFAULT_RESPONSE_LINES,
     compact_header: bool = True,
+    question_spacing: float | None = None,
+    question_title_gap: float | None = None,
+    question_text_bottom_gap: float | None = None,
+    first_response_line_offset: float | None = None,
+    response_bottom_padding: float | None = None,
 ) -> tuple[list[ManifestPage], int]:
     """
     Simula a paginação de `_draw_sheet` e retorna páginas com boxes de resposta.
@@ -169,14 +180,18 @@ def compute_answer_sheet_pages(
 
     normalized_response_lines = max(1, response_lines)
     response_line_gap = 5 * mm
-    first_response_line_offset = 10 * mm
-    response_bottom_padding = 3 * mm
+    froff = first_response_line_offset if first_response_line_offset is not None else 10 * mm
+    rbpad = response_bottom_padding if response_bottom_padding is not None else 3 * mm
     answer_area_h = (
-        first_response_line_offset
+        froff
         + (normalized_response_lines - 1) * response_line_gap
-        + response_bottom_padding
+        + rbpad
     )
-    spacing = 4 * mm
+    spacing = question_spacing if question_spacing is not None else 4 * mm
+    title_gap = question_title_gap if question_title_gap is not None else QUESTION_TITLE_GAP
+    text_bottom_gap = (
+        question_text_bottom_gap if question_text_bottom_gap is not None else QUESTION_TEXT_BOTTOM_GAP
+    )
 
     if logo_bottom_y_after is not None:
         y = logo_bottom_y_after
@@ -224,7 +239,14 @@ def compute_answer_sheet_pages(
     current.fiducials = fiducials_for_page(w, h, current_question_area_top_y)
 
     for q in questions:
-        needed = question_block_height(q.text, answer_area_h, spacing, usable_w)
+        needed = question_block_height(
+            q.text,
+            answer_area_h,
+            spacing,
+            usable_w,
+            title_gap=title_gap,
+            text_bottom_gap=text_bottom_gap,
+        )
         if y - needed < margin:
             pages.append(current)
             y = h - margin - top_inset
@@ -233,14 +255,14 @@ def compute_answer_sheet_pages(
             y -= cont_gap
             current.fiducials = fiducials_for_page(w, h, y + 6 * mm)
 
-        # Baseline do "Questão N"; em seguida o PDF faz `y -= 5 mm`.
-        y -= QUESTION_TITLE_GAP
+        # Baseline do "Questão N"; em seguida o PDF faz `y -= title_gap`.
+        y -= title_gap
 
         text_lines = wrap_question_text(q.text, usable_w)
         for _line in text_lines:
             y -= QUESTION_TEXT_LINE_GAP
 
-        y -= QUESTION_TEXT_BOTTOM_GAP
+        y -= text_bottom_gap
 
         box_x = margin
         box_y_bottom = y - answer_area_h
