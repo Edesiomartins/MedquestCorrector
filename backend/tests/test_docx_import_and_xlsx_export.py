@@ -29,6 +29,24 @@ def test_parse_discursive_docx_with_three_questions():
     assert parsed["questions"][2]["correction_criteria"] == "Critério 3"
 
 
+def test_parse_discursive_docx_without_hard_limit_of_questions():
+    doc = Document()
+    doc.add_paragraph("TÍTULO DA PROVA: Farmacologia")
+    doc.add_paragraph("TURMA: MED")
+    doc.add_paragraph("VALOR PADRÃO POR QUESTÃO: 1")
+    for idx in range(1, 13):
+        doc.add_paragraph(f"Q{idx}")
+        doc.add_paragraph(f"Enunciado: Enunciado {idx}")
+        doc.add_paragraph(f"Gabarito: Resposta {idx}")
+    buf = BytesIO()
+    doc.save(buf)
+
+    parsed = _parse_discursive_docx(buf.getvalue())
+
+    assert len(parsed["questions"]) == 12
+    assert parsed["questions"][-1]["question_number"] == 12
+
+
 def test_humanize_review_reason_hides_technical_json_from_main_reason():
     reason = humanize_review_reason(["JSON recuperado, mas schema incompleto"])
     assert reason == "Falha no formato da resposta da IA. Conferir nota sugerida."

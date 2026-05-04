@@ -31,7 +31,7 @@ from app.services.generator.answer_sheet import (
 )
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
-_MAX_EXAM_QUESTIONS = 10
+_DOCX_TEMPLATE_QUESTION_SLOTS = 10
 
 
 @router.get("", response_model=List[ExamSummary])
@@ -67,14 +67,16 @@ def create_exam(exam_in: ExamCreate, db: Session = Depends(get_db)):
 def download_discursive_docx_template():
     doc = Document()
     doc.add_heading("Template de Prova Discursiva", level=1)
-    doc.add_paragraph("Preencha de 1 a 10 questões. Questões vazias serão ignoradas.")
+    doc.add_paragraph(
+        "Preencha as questões necessárias. Questões vazias serão ignoradas."
+    )
     doc.add_paragraph("CURSO: ")
     doc.add_paragraph("DISCIPLINA: ")
     doc.add_paragraph("TURMA: ")
     doc.add_paragraph("VALOR GERAL: 1.0")
     doc.add_paragraph("")
 
-    for idx in range(1, _MAX_EXAM_QUESTIONS + 1):
+    for idx in range(1, _DOCX_TEMPLATE_QUESTION_SLOTS + 1):
         doc.add_heading(f"QUESTÃO {idx}", level=2)
         doc.add_paragraph("Enunciado: ")
         doc.add_paragraph("Resposta esperada: ")
@@ -133,7 +135,7 @@ async def import_discursive_docx(file: UploadFile = File(...), db: Session = Dep
 
         warnings = list(parsed["warnings"])
         created = 0
-        for q in parsed["questions"][:_MAX_EXAM_QUESTIONS]:
+        for q in parsed["questions"]:
             if not q["question_text"].strip():
                 warnings.append(f"Questão {q['question_number']} ignorada por enunciado vazio.")
                 continue
@@ -274,13 +276,6 @@ def add_question(exam_id: UUID, q_in: ExamQuestionCreate, db: Session = Depends(
     if not exam:
         raise HTTPException(status_code=404, detail="Prova não encontrada.")
 
-    existing_count = db.query(ExamQuestion).filter(ExamQuestion.exam_id == exam_id).count()
-    if existing_count >= _MAX_EXAM_QUESTIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"A prova já atingiu o limite de {_MAX_EXAM_QUESTIONS} questões.",
-        )
-
     q = ExamQuestion(exam_id=exam_id, **q_in.model_dump())
     db.add(q)
     db.commit()
@@ -336,8 +331,6 @@ def _build_answer_sheets_response(
     )
     if not questions:
         raise HTTPException(status_code=400, detail="Prova sem questões cadastradas.")
-    questions = questions[:_MAX_EXAM_QUESTIONS]
-
     try:
         pdf_bytes, manifest = generate_answer_sheets(
             exam_id=exam_id,
@@ -384,10 +377,10 @@ def _parse_discursive_docx(raw: bytes) -> dict:
 
     default_score = 1.0
     for line in lines:
-        q_match = re.match(r"^(?:quest[aã]o|q)\s*(\d{1,2})\b", line, flags=re.IGNORECASE)
+        q_match = re.match(r"^(?:quest[aã]o|q)\s*(\d+)\b", line, flags=re.IGNORECASE)
         if q_match:
             qnum = int(q_match.group(1))
-            if 1 <= qnum <= _MAX_EXAM_QUESTIONS:
+            if qnum >= 1:
                 current_q = qnum
                 current_field = None
                 questions.setdefault(
