@@ -110,7 +110,7 @@ export default function VisualExamPage() {
     const loadExams = async () => {
       setLoadingExams(true);
       try {
-        const { data } = await api.get<ExamOption[]>('/exams');
+        const { data } = await api.get<ExamOption[]>('/exams', { params: { practical: false } });
         if (cancelled) return;
         setExams(data);
         if (data.length > 0) setExamId(data[0].id);

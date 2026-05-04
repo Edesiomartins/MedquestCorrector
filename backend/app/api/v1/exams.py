@@ -2,7 +2,7 @@ import json
 import re
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -36,20 +36,30 @@ _DOCX_TEMPLATE_QUESTION_SLOTS = 10
 
 
 @router.get("", response_model=List[ExamSummary])
-def list_exams(db: Session = Depends(get_db)):
+def list_exams(
+    practical: bool | None = Query(
+        None,
+        description="true=só provas práticas; false=só provas normais; omitido=lista todas",
+    ),
+    db: Session = Depends(get_db),
+):
     counts = (
         db.query(ExamQuestion.exam_id, func.count(ExamQuestion.id))
         .group_by(ExamQuestion.exam_id)
         .all()
     )
     count_map = {eid: c for eid, c in counts}
-    exams = db.query(Exam).order_by(Exam.name).all()
+    q = db.query(Exam)
+    if practical is not None:
+        q = q.filter(Exam.is_practical == practical)
+    exams = q.order_by(Exam.name).all()
     return [
         ExamSummary(
             id=e.id,
             name=e.name,
             class_id=e.class_id,
             question_count=count_map.get(e.id, 0),
+            is_practical=bool(e.is_practical),
         )
         for e in exams
     ]
@@ -57,7 +67,11 @@ def list_exams(db: Session = Depends(get_db)):
 
 @router.post("", response_model=ExamResponse, status_code=status.HTTP_201_CREATED)
 def create_exam(exam_in: ExamCreate, db: Session = Depends(get_db)):
-    new_exam = Exam(name=exam_in.name, class_id=exam_in.class_id)
+    new_exam = Exam(
+        name=exam_in.name,
+        class_id=exam_in.class_id,
+        is_practical=exam_in.is_practical,
+    )
     db.add(new_exam)
     db.commit()
     db.refresh(new_exam)
@@ -97,7 +111,11 @@ def download_discursive_docx_template():
 
 
 @router.post("/import-discursive-docx")
-async def import_discursive_docx(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_discursive_docx(
+    file: UploadFile = File(...),
+    practical: bool = Query(False),
+    db: Session = Depends(get_db),
+):
     if not file.filename or not file.filename.lower().endswith(".docx"):
         raise HTTPException(
             status_code=400,
@@ -130,7 +148,7 @@ async def import_discursive_docx(file: UploadFile = File(...), db: Session = Dep
             if turma:
                 class_id = turma.id
 
-        exam = Exam(name=title, class_id=class_id)
+        exam = Exam(name=title, class_id=class_id, is_practical=practical)
         db.add(exam)
         db.flush()
 
@@ -194,6 +212,7 @@ def update_exam(exam_id: UUID, exam_in: ExamCreate, db: Session = Depends(get_db
         raise HTTPException(status_code=404, detail="Prova não encontrada.")
     exam.name = exam_in.name
     exam.class_id = exam_in.class_id
+    exam.is_practical = exam_in.is_practical
     db.commit()
     db.refresh(exam)
     return exam

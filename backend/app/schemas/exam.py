@@ -6,12 +6,14 @@ from typing import Optional
 class ExamCreate(BaseModel):
     name: str
     class_id: Optional[UUID] = None
+    is_practical: bool = False
 
 
 class ExamResponse(BaseModel):
     id: UUID
     name: str
     class_id: Optional[UUID] = None
+    is_practical: bool = False
 
     class Config:
         from_attributes = True
@@ -22,6 +24,7 @@ class ExamSummary(BaseModel):
     name: str
     class_id: Optional[UUID] = None
     question_count: int
+    is_practical: bool = False
 
 
 class ExamQuestionCreate(BaseModel):

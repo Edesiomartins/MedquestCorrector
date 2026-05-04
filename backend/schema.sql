@@ -36,6 +36,7 @@ CREATE TABLE exams (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     class_id UUID REFERENCES classes(id),
     name VARCHAR NOT NULL,
+    is_practical BOOLEAN NOT NULL DEFAULT FALSE,
     layout_manifest_json TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

@@ -16,7 +16,7 @@ export default function Dashboard() {
   const load = async () => {
     setLoading(true);
     try {
-      const { data } = await api.get<ExamSummary[]>('/exams');
+      const { data } = await api.get<ExamSummary[]>('/exams', { params: { practical: false } });
       setExams(data);
     } catch { /* silent */ }
     setLoading(false);

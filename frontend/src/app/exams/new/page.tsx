@@ -18,7 +18,11 @@ type ClassOption = {
   student_count: number;
 };
 
-export default function NewExamPage() {
+type NewExamPageContentProps = {
+  isPractical?: boolean;
+};
+
+export function NewExamPageContent({ isPractical = false }: NewExamPageContentProps) {
   const router = useRouter();
   const [examName, setExamName] = useState("");
   const [classId, setClassId] = useState<string>("");
@@ -74,7 +78,10 @@ export default function NewExamPage() {
     setError(null);
 
     try {
-      const payload: { name: string; class_id?: string } = { name: examName.trim() };
+      const payload: { name: string; class_id?: string; is_practical: boolean } = {
+        name: examName.trim(),
+        is_practical: isPractical,
+      };
       if (classId) payload.class_id = classId;
       const { data: exam } = await api.post('/exams', payload);
 
@@ -87,7 +94,7 @@ export default function NewExamPage() {
         });
       }
 
-      router.push('/exams');
+      router.push(isPractical ? '/provas-praticas' : '/exams');
     } catch {
       setError("Erro ao salvar a prova.");
     } finally {
@@ -98,7 +105,9 @@ export default function NewExamPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Nova Prova</h1>
+        <h1 className="text-3xl font-bold tracking-tight">
+          {isPractical ? 'Nova Prova Prática' : 'Nova Prova'}
+        </h1>
         <p className="text-slate-500 mt-1">Cadastre o enunciado e o gabarito de cada questão.</p>
       </div>
 
@@ -223,4 +232,8 @@ export default function NewExamPage() {
       </div>
     </div>
   );
+}
+
+export default function NewExamPage() {
+  return <NewExamPageContent />;
 }

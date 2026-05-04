@@ -1,6 +1,6 @@
 "use client";
 
-import { type ChangeEvent, useEffect, useRef, useState } from 'react';
+import { type ChangeEvent, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Plus,
   BookOpen,
@@ -19,6 +19,7 @@ type ExamSummary = {
   name: string;
   class_id: string | null;
   question_count: number;
+  is_practical: boolean;
 };
 
 type ExamsPageMode = 'default' | 'practical';
@@ -42,26 +43,27 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
 
-  const loadExams = async () => {
+  const isPracticalMode = mode === 'practical';
+
+  const loadExams = useCallback(async () => {
+    setLoading(true);
     setError(null);
     try {
-      const { data } = await api.get<ExamSummary[]>('/exams');
+      const { data } = await api.get<ExamSummary[]>('/exams', {
+        params: { practical: isPracticalMode },
+      });
       setExams(data);
     } catch {
       setError('Não foi possível carregar as provas.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [isPracticalMode]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadExams();
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
+    void loadExams();
+  }, [loadExams]);
 
-  const isPracticalMode = mode === 'practical';
   const pageTitle = isPracticalMode ? 'Provas Práticas' : 'Provas';
   const pageSubtitle = isPracticalMode
     ? 'Mesma configuração de provas, com folhas práticas compactas (2 linhas por questão).'
@@ -166,13 +168,14 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
     try {
       const formData = new FormData();
       formData.append('file', file);
+      const q = isPracticalMode ? '?practical=true' : '?practical=false';
       const { data } = await uploadApi.post<{
         ok: boolean;
         exam_id: string;
         title: string;
         questions_created: number;
         warnings: string[];
-      }>('/exams/import-discursive-docx', formData);
+      }>(`/exams/import-discursive-docx${q}`, formData);
       setImportMessage(`Prova criada com sucesso. ${data.questions_created} questões importadas.`);
       setImportWarnings(data.warnings || []);
       await loadExams();
@@ -246,7 +249,7 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
             ) : null}
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:flex-nowrap lg:justify-end">
-            <Link href="/exams/new">
+            <Link href={isPracticalMode ? '/provas-praticas/new' : '/exams/new'}>
               <button
                 type="button"
                 className="btn-primary inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap px-3 text-sm font-medium shadow-emerald-500/20 shadow-lg sm:w-auto"
