@@ -34,6 +34,8 @@ QUESTION_TEXT_LINE_GAP = 4 * mm
 QUESTION_TEXT_BOTTOM_GAP = 2 * mm
 # Mantido para compatibilidade com imports antigos; o cálculo atual usa o texto real.
 QUESTION_BLOCK_OVERHEAD = QUESTION_TITLE_GAP + (2 * QUESTION_TEXT_LINE_GAP) + QUESTION_TEXT_BOTTOM_GAP
+DEFAULT_RESPONSE_LINES = 5
+PRACTICAL_RESPONSE_LINES = 2
 
 
 @dataclass
@@ -150,6 +152,8 @@ def compute_answer_sheet_pages(
     student_id: UUID,
     *,
     logo_bottom_y_after: float | None = None,
+    response_lines: int = DEFAULT_RESPONSE_LINES,
+    compact_header: bool = True,
 ) -> tuple[list[ManifestPage], int]:
     """
     Simula a paginação de `_draw_sheet` e retorna páginas com boxes de resposta.
@@ -163,13 +167,13 @@ def compute_answer_sheet_pages(
     top_inset = PAGE_TOP_CONTENT_INSET
     cont_gap = CONTINUATION_GAP_BELOW_HEADER
 
-    response_lines = 5
+    normalized_response_lines = max(1, response_lines)
     response_line_gap = 5 * mm
     first_response_line_offset = 10 * mm
     response_bottom_padding = 3 * mm
     answer_area_h = (
         first_response_line_offset
-        + (response_lines - 1) * response_line_gap
+        + (normalized_response_lines - 1) * response_line_gap
         + response_bottom_padding
     )
     spacing = 4 * mm
@@ -180,14 +184,25 @@ def compute_answer_sheet_pages(
         y = h - margin - top_inset
 
     # --- Cabeçalho (espelho exato de _draw_sheet) ---
-    y -= 8 * mm
-    y -= 12 * mm
+    if compact_header:
+        title_gap = 6 * mm
+        subtitle_gap = 8 * mm
+        box_h = 18 * mm
+        box_bottom_gap = 5 * mm
+        divider_gap = 4 * mm
+    else:
+        title_gap = 8 * mm
+        subtitle_gap = 12 * mm
+        box_h = 22 * mm
+        box_bottom_gap = 8 * mm
+        divider_gap = 6 * mm
 
-    box_h = 22 * mm
-    y -= box_h + 8 * mm
+    y -= title_gap
+    y -= subtitle_gap
+    y -= box_h + box_bottom_gap
 
     current_question_area_top_y = y
-    y -= 6 * mm
+    y -= divider_gap
 
     pages: list[ManifestPage] = []
 

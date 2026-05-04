@@ -21,7 +21,13 @@ type ExamSummary = {
   question_count: number;
 };
 
-export default function ExamsPage() {
+type ExamsPageMode = 'default' | 'practical';
+
+type ExamsPageProps = {
+  mode?: ExamsPageMode;
+};
+
+export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
   const router = useRouter();
   const [exams, setExams] = useState<ExamSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,13 +61,25 @@ export default function ExamsPage() {
     return () => window.clearTimeout(timer);
   }, []);
 
+  const isPracticalMode = mode === 'practical';
+  const pageTitle = isPracticalMode ? 'Provas Práticas' : 'Provas';
+  const pageSubtitle = isPracticalMode
+    ? 'Mesma configuração de provas, com folhas práticas compactas (2 linhas por questão).'
+    : 'Gabaritos e questões para correção assistida.';
+
   const handleDownloadSheets = async (examId: string, examName: string, logoFile: File) => {
     setDownloadingId(examId);
     setError(null);
     try {
       const formData = new FormData();
       formData.append('logo', logoFile);
-      const response = await uploadApi.post(`/exams/${examId}/answer-sheets`, formData, { responseType: 'blob' });
+      const response = await uploadApi.post(
+        isPracticalMode
+          ? `/exams/${examId}/answer-sheets/practical`
+          : `/exams/${examId}/answer-sheets`,
+        formData,
+        { responseType: 'blob' },
+      );
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
@@ -191,8 +209,8 @@ export default function ExamsPage() {
 
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Provas</h1>
-          <p className="text-slate-500 mt-1">Gabaritos e questões para correção assistida.</p>
+          <h1 className="text-2xl font-bold tracking-tight">{pageTitle}</h1>
+          <p className="text-slate-500 mt-1 text-sm">{pageSubtitle}</p>
         </div>
       </div>
 
@@ -346,4 +364,8 @@ export default function ExamsPage() {
 
     </div>
   );
+}
+
+export default function ExamsPage() {
+  return <ExamsPageContent mode="default" />;
 }

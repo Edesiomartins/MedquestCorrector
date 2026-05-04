@@ -28,6 +28,7 @@ from app.services.generator.answer_sheet import (
     QuestionSlot,
     StudentInfo,
     generate_answer_sheets,
+    practical_answer_sheet_options,
 )
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -298,10 +299,26 @@ def download_answer_sheets_with_logo(
     return _build_answer_sheets_response(exam_id=exam_id, db=db, logo_bytes=logo_bytes)
 
 
+@router.post("/{exam_id}/answer-sheets/practical")
+def download_practical_answer_sheets_with_logo(
+    exam_id: UUID,
+    logo: UploadFile | None = File(default=None),
+    db: Session = Depends(get_db),
+):
+    logo_bytes = _read_logo_bytes(logo)
+    return _build_answer_sheets_response(
+        exam_id=exam_id,
+        db=db,
+        logo_bytes=logo_bytes,
+        sheet_options=practical_answer_sheet_options(),
+    )
+
+
 def _build_answer_sheets_response(
     exam_id: UUID,
     db: Session,
     logo_bytes: bytes | None = None,
+    sheet_options: dict | None = None,
 ):
     """Gera e baixa folhas-resposta PDF para todos os alunos da turma vinculada."""
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
@@ -352,6 +369,7 @@ def _build_answer_sheets_response(
                 for s in students
             ],
             logo_bytes=logo_bytes,
+            **(sheet_options or {}),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

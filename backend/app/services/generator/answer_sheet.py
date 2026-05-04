@@ -13,7 +13,9 @@ from reportlab.pdfgen import canvas
 
 from app.services.generator.sheet_layout import (
     CONTINUATION_GAP_BELOW_HEADER,
+    DEFAULT_RESPONSE_LINES,
     PAGE_TOP_CONTENT_INSET,
+    PRACTICAL_RESPONSE_LINES,
     QUESTION_TEXT_FONT_NAME,
     QUESTION_TEXT_FONT_SIZE,
     QUESTION_TEXT_BOTTOM_GAP,
@@ -58,6 +60,8 @@ def generate_answer_sheets(
     questions: list[QuestionSlot],
     students: list[tuple[UUID, StudentInfo]],
     logo_bytes: bytes | None = None,
+    response_lines: int = DEFAULT_RESPONSE_LINES,
+    compact_header: bool = True,
 ) -> tuple[bytes, dict]:
     """
     Gera PDF com folhas-resposta e o manifesto de layout (coordenadas dos boxes).
@@ -88,6 +92,8 @@ def generate_answer_sheets(
             questions,
             student_id,
             logo_bottom_y_after=logo_y_after,
+            response_lines=response_lines,
+            compact_header=compact_header,
         )
         all_manifest_pages.extend(pages_sim)
 
@@ -102,6 +108,8 @@ def generate_answer_sheets(
             exam_id=exam_id,
             student_id=student_id,
             total_pages_for_student=len(pages_sim),
+            response_lines=response_lines,
+            compact_header=compact_header,
         )
         c.showPage()
 
@@ -193,6 +201,8 @@ def _draw_sheet(
     exam_id: UUID,
     student_id: UUID,
     total_pages_for_student: int,
+    response_lines: int = DEFAULT_RESPONSE_LINES,
+    compact_header: bool = True,
 ):
     margin = 2 * cm
     page_in_student = 0
@@ -231,16 +241,16 @@ def _draw_sheet(
         )
         y = logo_y - 6 * mm
 
-    c.setFont("Helvetica-Bold", 16)
+    c.setFont("Helvetica-Bold", 14 if compact_header else 16)
     c.drawCentredString(w / 2, y, exam_name)
-    y -= 8 * mm
+    y -= (6 if compact_header else 8) * mm
 
     c.setFont("Helvetica", 9)
     c.drawCentredString(w / 2, y, "FOLHA DE RESPOSTAS — Preencha com letra legível")
-    y -= 12 * mm
+    y -= (8 if compact_header else 12) * mm
 
     c.setFont("Helvetica-Bold", 10)
-    box_h = 22 * mm
+    box_h = (18 if compact_header else 22) * mm
     c.setStrokeColor(colors.grey)
     c.setLineWidth(0.5)
     c.rect(margin, y - box_h, w - 2 * margin, box_h + 2 * mm, stroke=1, fill=0)
@@ -253,28 +263,34 @@ def _draw_sheet(
 
     text_left = qr_x + qr_size + 6 * mm
     c.setFont("Helvetica", 9)
-    c.drawString(text_left, y - 5 * mm, f"Nome: {student.name}")
-    c.drawString(text_left, y - 11 * mm, f"Turma: {student.turma}")
-    c.drawString(text_left, y - 17 * mm, f"Matrícula: {student.registration_number}")
-    c.drawString(text_left + 70 * mm, y - 17 * mm, f"Curso: {student.curso}")
+    if compact_header:
+        c.drawString(text_left, y - 5 * mm, f"Nome: {student.name}")
+        c.drawString(text_left, y - 10 * mm, f"Turma: {student.turma}")
+        c.drawString(text_left, y - 15 * mm, f"Matrícula: {student.registration_number}")
+        c.drawString(text_left + 70 * mm, y - 15 * mm, f"Curso: {student.curso}")
+    else:
+        c.drawString(text_left, y - 5 * mm, f"Nome: {student.name}")
+        c.drawString(text_left, y - 11 * mm, f"Turma: {student.turma}")
+        c.drawString(text_left, y - 17 * mm, f"Matrícula: {student.registration_number}")
+        c.drawString(text_left + 70 * mm, y - 17 * mm, f"Curso: {student.curso}")
 
-    y -= box_h + 8 * mm
+    y -= box_h + ((5 if compact_header else 8) * mm)
 
     c.setStrokeColor(colors.black)
     c.setLineWidth(0.3)
     c.line(margin, y, w - margin, y)
     _draw_fiducials(c, w, h, y)
-    y -= 6 * mm
+    y -= (4 if compact_header else 6) * mm
 
     usable_w = w - 2 * margin
-    response_lines = 5
+    effective_response_lines = max(1, response_lines)
     response_line_gap = 5 * mm
     response_label_offset = 4 * mm
     first_response_line_offset = 10 * mm
     response_bottom_padding = 3 * mm
     answer_area_h = (
         first_response_line_offset
-        + (response_lines - 1) * response_line_gap
+        + (effective_response_lines - 1) * response_line_gap
         + response_bottom_padding
     )
     spacing = 4 * mm
@@ -319,7 +335,7 @@ def _draw_sheet(
         c.drawString(margin + 3 * mm, y - response_label_offset, "Resposta:")
 
         c.setStrokeColor(colors.Color(0.85, 0.85, 0.85))
-        for i in range(response_lines):
+        for i in range(effective_response_lines):
             line_y = y - first_response_line_offset - (i * response_line_gap)
             c.line(margin + 2 * mm, line_y, w - margin - 2 * mm, line_y)
 
@@ -345,3 +361,8 @@ def _load_logo(logo_bytes: bytes | None) -> LogoSpec | None:
     if img_w <= 0 or img_h <= 0:
         raise ValueError("A imagem da logo é inválida.")
     return LogoSpec(image=image, width=float(img_w), height=float(img_h))
+
+
+def practical_answer_sheet_options() -> dict[str, int | bool]:
+    """Parâmetros para folha prática com 2 linhas por questão."""
+    return {"response_lines": PRACTICAL_RESPONSE_LINES, "compact_header": True}

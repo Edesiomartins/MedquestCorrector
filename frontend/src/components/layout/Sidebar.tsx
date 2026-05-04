@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, FileText, CheckSquare, Users, ScanText } from "lucide-react";
+import { Home, FileText, CheckSquare, Users, ScanText, ClipboardList } from "lucide-react";
 
 const active =
   "flex items-center space-x-3 px-3 py-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-medium";
@@ -39,6 +39,10 @@ export default function Sidebar() {
         <Link href="/exams" className={linkClass(pathname, "/exams")}>
           <FileText className="w-5 h-5" />
           <span>Provas</span>
+        </Link>
+        <Link href="/provas-praticas" className={linkClass(pathname, "/provas-praticas")}>
+          <ClipboardList className="w-5 h-5" />
+          <span>Provas Práticas</span>
         </Link>
         <Link href="/review" className={linkClass(pathname, "/review")}>
           <CheckSquare className="w-5 h-5" />
