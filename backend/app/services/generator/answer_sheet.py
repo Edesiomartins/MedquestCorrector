@@ -484,9 +484,11 @@ def practical_answer_sheet_options() -> dict[str, int | bool | float]:
     return {
         "response_lines": 1,
         "compact_header": True,
-        "question_spacing": 2.5 * mm,
+        # Mantém o enunciado visualmente associado à própria caixa de resposta,
+        # evitando parecer que ele pertence à questão anterior.
+        "question_spacing": 7 * mm,
         "question_title_gap": 0,
-        "question_text_bottom_gap": 2 * mm,
+        "question_text_bottom_gap": 1 * mm,
         "first_response_line_offset": 6 * mm,
         "response_bottom_padding": 2 * mm,
         "logo_max_height": 12 * mm,
