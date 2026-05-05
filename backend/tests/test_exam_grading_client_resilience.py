@@ -1,4 +1,5 @@
 from app.services.exam_grading_client import (
+    _build_prompt,
     _normalize_grading_response,
     clamp_grade,
     grade_practical_answer,
@@ -117,3 +118,84 @@ def test_practical_grading_rejects_wrong_laterality():
     assert out["score"] == 0.0
     assert out["verdict"] == "incorreta"
     assert "lateralidade" in out["justification"].lower()
+
+
+def test_practical_grading_accepts_synonym_grande_dorsal_vs_latissimo():
+    out = grade_practical_answer(
+        {"number": 3, "reading_confidence": "alta"},
+        {"expected_answer": "Músculo Grande dorsal E", "max_score": 1.0},
+        "m. latíssimo do dorso E.",
+        reading_confidence="alta",
+    )
+
+    assert out["score"] == 1.0
+    assert out["verdict"] == "correta"
+
+
+def test_practical_grading_accepts_trailing_laterality_abbreviation_only_at_end():
+    out = grade_practical_answer(
+        {"number": 9, "reading_confidence": "alta"},
+        {"expected_answer": "Músculo Redondo menor E", "max_score": 1.0},
+        "m redondo menor e",
+        reading_confidence="alta",
+    )
+
+    assert out["score"] == 1.0
+    assert out["verdict"] == "correta"
+
+
+def test_practical_grading_expands_muscle_abbreviations_m_and_mm():
+    out = grade_practical_answer(
+        {"number": 1, "reading_confidence": "alta"},
+        {"expected_answer": "Músculos peitoral maior e redondo menor esquerdo", "max_score": 1.0},
+        "Mm. peitoral maior e redondo menor E.",
+        reading_confidence="alta",
+    )
+
+    assert out["score"] == 1.0
+    assert out["verdict"] == "correta"
+
+
+def test_practical_grading_expands_artery_abbreviation_a():
+    out = grade_practical_answer(
+        {"number": 1, "reading_confidence": "alta"},
+        {"expected_answer": "Artéria braquial direita", "max_score": 1.0},
+        "A. braquial D.",
+        reading_confidence="alta",
+    )
+
+    assert out["score"] == 1.0
+    assert out["verdict"] == "correta"
+
+
+def test_practical_grading_near_match_sets_human_review():
+    out = grade_practical_answer(
+        {"number": 1, "reading_confidence": "alta"},
+        {"expected_answer": "Músculo Bucinador E", "max_score": 1.0},
+        "M. Bucinafor E.",
+        reading_confidence="alta",
+    )
+
+    assert out["score"] == 0.0
+    assert out["needs_human_review"] is True
+    assert "ocr/abreviação" in out["review_reason"].lower()
+
+
+def test_discursive_prompt_includes_expanded_anatomy_abbreviations():
+    prompt = _build_prompt(
+        {
+            "number": 1,
+            "prompt": "Descreva Mm. e A. relacionadas ao caso.",
+        },
+        {
+            "expected_answer": "Mm. flexores e A. braquial",
+            "max_score": 1.0,
+        },
+        "Mm. flexores do antebraço e A. braquial",
+        "alta",
+    )
+
+    assert "student_answer_expanded" in prompt
+    assert "musculos flexores" in prompt.lower()
+    assert "arteria braquial" in prompt.lower()
+    assert "rubric_expected_answer_expanded" in prompt

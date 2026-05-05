@@ -124,7 +124,7 @@ def grade_practical_answer(
     exactish = bool(best_expected) and (
         best_expected in answer_norm
         or answer_norm in best_expected
-        or best_similarity >= 0.86
+        or best_similarity >= 0.90
     )
     structure_match = bool(best_expected) and _practical_similarity(
         _without_laterality(answer_norm),
@@ -132,13 +132,19 @@ def grade_practical_answer(
     ) >= 0.86
 
     is_correct = exactish and laterality_ok
-    needs_review = confidence == "baixa" or (not is_correct and best_similarity >= 0.72)
+    near_match = (not is_correct) and (
+        (laterality_ok and best_similarity >= 0.72)
+        or (structure_match and best_similarity >= 0.68)
+    )
+    needs_review = confidence == "baixa" or near_match
     score = max_score if is_correct else 0.0
     verdict = "correta" if is_correct else "incorreta"
     if not laterality_ok and structure_match:
         reason = "Estrutura compatível, mas lateralidade divergente."
     elif is_correct:
         reason = "Resposta prática confere com o gabarito esperado."
+    elif near_match:
+        reason = "Resposta próxima ao gabarito; possível ruído de OCR/abreviação. Revisão humana recomendada."
     else:
         reason = f"Resposta prática não confere com o gabarito esperado: {expected_raw}."
 
@@ -154,7 +160,7 @@ def grade_practical_answer(
         "review_reason": (
             "Leitura visual com baixa confiança."
             if confidence == "baixa"
-            else ("Resposta próxima ao gabarito; revisar possível erro de OCR." if needs_review else "")
+            else ("Resposta próxima ao gabarito; revisar possível erro de OCR/abreviação." if needs_review else "")
         ),
         "model_used": "practical-rule-based",
         "similarity": round(best_similarity, 3),
@@ -282,11 +288,26 @@ def _call_openrouter_text(model: str, prompt: str) -> str:
 
 
 def _build_prompt(question: dict, rubric: dict, student_answer: str, reading_confidence: str) -> str:
+    prompt_text = str(
+        question.get("prompt")
+        or question.get("prompt_detected")
+        or question.get("question_prompt")
+        or ""
+    )
+    answer_text = student_answer or ""
+    rubric_text = (
+        str(rubric.get("expected_answer") or "")
+        or str(rubric.get("rubric") or "")
+        or str(rubric.get("answer") or "")
+    )
     payload = {
         "question_number": question.get("number") or question.get("question_number"),
-        "question_prompt": question.get("prompt") or question.get("prompt_detected") or "",
+        "question_prompt": prompt_text,
+        "question_prompt_expanded": _expand_anatomy_abbreviations(prompt_text),
         "reading_confidence": reading_confidence or question.get("reading_confidence") or "media",
-        "student_answer": student_answer or "",
+        "student_answer": answer_text,
+        "student_answer_expanded": _expand_anatomy_abbreviations(answer_text),
+        "rubric_expected_answer_expanded": _expand_anatomy_abbreviations(rubric_text),
         "rubric": rubric or {},
     }
     return (
@@ -630,13 +651,14 @@ def _strip_accents(value: str) -> str:
 
 def _normalize_practical_answer(value: str) -> str:
     text = _strip_accents(value).lower()
+    text = _expand_anatomy_abbreviations(text)
     text = re.sub(r"\b(m|musculo|músculo)\.?\b", " ", text)
     text = re.sub(r"\besq(?:\.|uerda|uerdo)?\b", " esquerdo ", text)
     text = re.sub(r"\bdir(?:\.|eita|eito)?\b", " direito ", text)
-    text = re.sub(r"\be\b", " esquerdo ", text)
-    text = re.sub(r"\bd\b", " direito ", text)
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
+    text = _normalize_trailing_laterality_token(text)
+    text = _canonicalize_practical_aliases(text)
     return text
 
 
@@ -656,7 +678,8 @@ def _practical_similarity(answer_norm: str, expected_norm: str) -> float:
     answer_tokens = set(answer_norm.split())
     expected_tokens = set(expected_norm.split())
     overlap = len(answer_tokens & expected_tokens) / max(1, len(expected_tokens))
-    return max(ratio, overlap)
+    # Evita falso positivo: combina similaridade textual + cobertura de termos esperados.
+    return (0.65 * ratio) + (0.35 * overlap)
 
 
 def _laterality_compatible(answer: str, expected: str) -> bool:
@@ -683,3 +706,53 @@ def _extract_laterality(value: str) -> str:
 def _without_laterality(value: str) -> str:
     text = re.sub(r"\b(esquerdo|esquerda|direito|direita)\b", " ", value)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalize_trailing_laterality_token(text: str) -> str:
+    """Mapeia apenas marcador final isolado (E/D) para lateralidade."""
+    tokens = text.split()
+    if not tokens:
+        return ""
+    tail = tokens[-1]
+    if tail == "e":
+        tokens[-1] = "esquerdo"
+    elif tail == "d":
+        tokens[-1] = "direito"
+    return " ".join(tokens)
+
+
+def _canonicalize_practical_aliases(text: str) -> str:
+    if not text:
+        return ""
+    out = f" {text} "
+    # Remove ruído comum de OCR que não define o músculo.
+    out = re.sub(r"\bilegivel\b", " ", out)
+    # Sinônimos recorrentes nas provas práticas.
+    out = re.sub(r"\bgrande dorsal\b", " latissimo do dorso ", out)
+    out = re.sub(r"\banconea?\b", " anconeo ", out)
+    out = re.sub(r"\bbucinator\b", " bucinador ", out)
+    out = re.sub(r"\bhalix\b", " halux ", out)
+    out = re.sub(r"\bvleo\b", " soleo ", out)
+    return re.sub(r"\s+", " ", out).strip()
+
+
+def _expand_anatomy_abbreviations(text: str) -> str:
+    out = f" {_strip_accents(text).lower()} "
+    # Anatomia: singular/plural
+    out = re.sub(r"\bmm\.?(?=\s|$)", " musculos ", out)
+    out = re.sub(r"\bm\.?(?=\s|$)", " musculo ", out)
+    # Vasos
+    out = re.sub(r"\baa\.?(?=\s|$)", " arterias ", out)
+    out = re.sub(r"\ba\.?(?=\s|$)", " arteria ", out)
+    out = re.sub(r"\bvv\.?(?=\s|$)", " veias ", out)
+    out = re.sub(r"\bv\.?(?=\s|$)", " veia ", out)
+    # Nervos / ligamentos / tendões / ossos
+    out = re.sub(r"\bnn\.?(?=\s|$)", " nervos ", out)
+    out = re.sub(r"\bn\.?(?=\s|$)", " nervo ", out)
+    out = re.sub(r"\bll\.?(?=\s|$)", " ligamentos ", out)
+    out = re.sub(r"\bl\.?(?=\s|$)", " ligamento ", out)
+    out = re.sub(r"\btt\.?(?=\s|$)", " tendoes ", out)
+    out = re.sub(r"\bt\.?(?=\s|$)", " tendao ", out)
+    out = re.sub(r"\boss\.?(?=\s|$)", " ossos ", out)
+    out = re.sub(r"\bos\.?(?=\s|$)", " osso ", out)
+    return re.sub(r"\s+", " ", out).strip()
