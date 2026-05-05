@@ -73,6 +73,16 @@ def generate_answer_sheets(
     question_text_bottom_gap: float | None = None,
     first_response_line_offset: float | None = None,
     response_bottom_padding: float | None = None,
+    logo_max_height: float | None = None,
+    logo_bottom_gap: float | None = None,
+    header_title_gap: float | None = None,
+    header_subtitle_gap: float | None = None,
+    header_box_h: float | None = None,
+    header_box_bottom_gap: float | None = None,
+    header_divider_below_gap: float | None = None,
+    header_title_font_size: float | None = None,
+    header_subtitle_font_size: float | None = None,
+    inline_question_prompt: bool = False,
 ) -> tuple[bytes, dict]:
     """
     Gera PDF com folhas-resposta e o manifesto de layout (coordenadas dos boxes).
@@ -93,6 +103,8 @@ def generate_answer_sheets(
         first_response_line_offset if first_response_line_offset is not None else 10 * mm
     )
     resp_pad_eff = response_bottom_padding if response_bottom_padding is not None else 3 * mm
+    logo_max_h_eff = logo_max_height if logo_max_height is not None else 24 * mm
+    logo_bottom_gap_eff = logo_bottom_gap if logo_bottom_gap is not None else 6 * mm
 
     all_manifest_pages = []
 
@@ -102,11 +114,11 @@ def generate_answer_sheets(
             margin = 2 * cm
             y = height - margin - PAGE_TOP_CONTENT_INSET
             max_logo_w = width - (2 * margin)
-            max_logo_h = 24 * mm
+            max_logo_h = logo_max_h_eff
             scale = min(max_logo_w / logo.width, max_logo_h / logo.height)
             draw_h = logo.height * scale
             logo_y = y - draw_h
-            logo_y_after = logo_y - 6 * mm
+            logo_y_after = logo_y - logo_bottom_gap_eff
 
         pages_sim, _total = compute_answer_sheet_pages(
             exam_id,
@@ -120,6 +132,16 @@ def generate_answer_sheets(
             question_text_bottom_gap=question_text_bottom_gap,
             first_response_line_offset=first_response_line_offset,
             response_bottom_padding=response_bottom_padding,
+            logo_max_height=logo_max_height,
+            logo_bottom_gap=logo_bottom_gap,
+            header_title_gap=header_title_gap,
+            header_subtitle_gap=header_subtitle_gap,
+            header_box_h=header_box_h,
+            header_box_bottom_gap=header_box_bottom_gap,
+            header_divider_below_gap=header_divider_below_gap,
+            header_title_font_size=header_title_font_size,
+            header_subtitle_font_size=header_subtitle_font_size,
+            inline_question_prompt=inline_question_prompt,
         )
         all_manifest_pages.extend(pages_sim)
 
@@ -141,6 +163,16 @@ def generate_answer_sheets(
             question_text_bottom_gap=text_bottom_eff,
             first_response_line_offset=first_line_eff,
             response_bottom_padding=resp_pad_eff,
+            logo_max_height=logo_max_h_eff,
+            logo_bottom_gap=logo_bottom_gap_eff,
+            header_title_gap=header_title_gap,
+            header_subtitle_gap=header_subtitle_gap,
+            header_box_h=header_box_h,
+            header_box_bottom_gap=header_box_bottom_gap,
+            header_divider_below_gap=header_divider_below_gap,
+            header_title_font_size=header_title_font_size,
+            header_subtitle_font_size=header_subtitle_font_size,
+            inline_question_prompt=inline_question_prompt,
         )
         c.showPage()
 
@@ -239,6 +271,16 @@ def _draw_sheet(
     question_text_bottom_gap: float,
     first_response_line_offset: float,
     response_bottom_padding: float,
+    logo_max_height: float,
+    logo_bottom_gap: float,
+    header_title_gap: float | None,
+    header_subtitle_gap: float | None,
+    header_box_h: float | None,
+    header_box_bottom_gap: float | None,
+    header_divider_below_gap: float | None,
+    header_title_font_size: float | None,
+    header_subtitle_font_size: float | None,
+    inline_question_prompt: bool,
 ):
     margin = 2 * cm
     page_in_student = 0
@@ -260,7 +302,7 @@ def _draw_sheet(
 
     if logo:
         max_logo_w = w - (2 * margin)
-        max_logo_h = 24 * mm
+        max_logo_h = logo_max_height
         scale = min(max_logo_w / logo.width, max_logo_h / logo.height)
         draw_w = logo.width * scale
         draw_h = logo.height * scale
@@ -275,25 +317,45 @@ def _draw_sheet(
             preserveAspectRatio=True,
             mask="auto",
         )
-        y = logo_y - 6 * mm
+        y = logo_y - logo_bottom_gap
 
-    c.setFont("Helvetica-Bold", 14 if compact_header else 16)
+    c.setFont(
+        "Helvetica-Bold",
+        header_title_font_size
+        if header_title_font_size is not None
+        else (14 if compact_header else 16),
+    )
     c.drawCentredString(w / 2, y, exam_name)
-    y -= (6 if compact_header else 8) * mm
+    y -= header_title_gap if header_title_gap is not None else (6 if compact_header else 8) * mm
 
-    c.setFont("Helvetica", 9)
+    c.setFont(
+        "Helvetica",
+        header_subtitle_font_size
+        if header_subtitle_font_size is not None
+        else 9,
+    )
     c.drawCentredString(w / 2, y, "FOLHA DE RESPOSTAS — Preencha com letra legível")
-    y -= (8 if compact_header else 12) * mm
+    y -= header_subtitle_gap if header_subtitle_gap is not None else (8 if compact_header else 12) * mm
 
     c.setFont("Helvetica-Bold", 10)
     if compact_header:
-        box_h = float(HEADER_STUDENT_BOX_H_COMPACT)
+        box_h = float(header_box_h if header_box_h is not None else HEADER_STUDENT_BOX_H_COMPACT)
         qr_top_pad = QR_TOP_PADDING_COMPACT
-        divider_below_gap = HEADER_DIVIDER_BELOW_GAP_COMPACT
+        divider_below_gap = (
+            header_divider_below_gap
+            if header_divider_below_gap is not None
+            else HEADER_DIVIDER_BELOW_GAP_COMPACT
+        )
+        box_bottom_gap = header_box_bottom_gap if header_box_bottom_gap is not None else 5 * mm
     else:
-        box_h = float(HEADER_STUDENT_BOX_H_FULL)
+        box_h = float(header_box_h if header_box_h is not None else HEADER_STUDENT_BOX_H_FULL)
         qr_top_pad = QR_TOP_PADDING_FULL
-        divider_below_gap = HEADER_DIVIDER_BELOW_GAP_FULL
+        divider_below_gap = (
+            header_divider_below_gap
+            if header_divider_below_gap is not None
+            else HEADER_DIVIDER_BELOW_GAP_FULL
+        )
+        box_bottom_gap = header_box_bottom_gap if header_box_bottom_gap is not None else 8 * mm
 
     c.setStrokeColor(colors.grey)
     c.setLineWidth(0.5)
@@ -319,7 +381,7 @@ def _draw_sheet(
         c.drawString(text_left, y - 17 * mm, f"Matrícula: {student.registration_number}")
         c.drawString(text_left + 70 * mm, y - 17 * mm, f"Curso: {student.curso}")
 
-    y -= box_h + ((5 if compact_header else 8) * mm)
+    y -= box_h + box_bottom_gap
 
     c.setStrokeColor(colors.black)
     c.setLineWidth(0.3)
@@ -346,6 +408,7 @@ def _draw_sheet(
             usable_w,
             title_gap=question_title_gap,
             text_bottom_gap=question_text_bottom_gap,
+            question_prefix=f"Questão {q.number} - " if inline_question_prompt else "",
         )
         if y - needed < margin:
             c.showPage()
@@ -362,15 +425,18 @@ def _draw_sheet(
             y -= CONTINUATION_GAP_BELOW_HEADER
             _draw_fiducials(c, w, h, y + 6 * mm)
 
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(margin, y, f"Questão {q.number}")
+        if inline_question_prompt:
+            text_lines = wrap_question_text(f"Questão {q.number} - {q.text}", usable_w)
+        else:
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(margin, y, f"Questão {q.number}")
 
-        c.setFont("Helvetica", 8)
-        c.drawRightString(w - margin, y, f"(vale {q.max_score} pts)")
+            c.setFont("Helvetica", 8)
+            c.drawRightString(w - margin, y, f"(vale {q.max_score} pts)")
 
-        y -= question_title_gap
+            y -= question_title_gap
 
-        text_lines = wrap_question_text(q.text, usable_w)
+            text_lines = wrap_question_text(q.text, usable_w)
         y = _draw_question_text(c, text_lines, margin, y, usable_w)
 
         y -= question_text_bottom_gap
@@ -418,9 +484,19 @@ def practical_answer_sheet_options() -> dict[str, int | bool | float]:
     return {
         "response_lines": 1,
         "compact_header": True,
-        "question_spacing": 2 * mm,
-        "question_title_gap": 3 * mm,
+        "question_spacing": 1 * mm,
+        "question_title_gap": 0,
         "question_text_bottom_gap": 1 * mm,
-        "first_response_line_offset": 7 * mm,
+        "first_response_line_offset": 6 * mm,
         "response_bottom_padding": 2 * mm,
+        "logo_max_height": 12 * mm,
+        "logo_bottom_gap": 3 * mm,
+        "header_title_gap": 4 * mm,
+        "header_subtitle_gap": 4 * mm,
+        "header_box_h": 20 * mm,
+        "header_box_bottom_gap": 2 * mm,
+        "header_divider_below_gap": 3 * mm,
+        "header_title_font_size": 12,
+        "header_subtitle_font_size": 8,
+        "inline_question_prompt": True,
     }

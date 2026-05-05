@@ -3,7 +3,12 @@ from uuid import uuid4
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 
-from app.services.generator.answer_sheet import QuestionSlot, StudentInfo, generate_answer_sheets
+from app.services.generator.answer_sheet import (
+    QuestionSlot,
+    StudentInfo,
+    generate_answer_sheets,
+    practical_answer_sheet_options,
+)
 from app.services.generator.sheet_layout import (
     FIDUCIAL_OUTER_GAP,
     MARGIN,
@@ -145,3 +150,25 @@ def test_generated_sheet_does_not_truncate_long_question_text():
 
     normalized = " ".join(extracted_text.split())
     assert final_phrase in normalized
+
+
+def test_practical_sheet_fits_twelve_short_questions_with_compact_logo_space():
+    options = practical_answer_sheet_options()
+    logo_bottom_y_after = (
+        A4[1]
+        - MARGIN
+        - PAGE_TOP_CONTENT_INSET
+        - options["logo_max_height"]
+        - options["logo_bottom_gap"]
+    )
+
+    pages, _ = compute_answer_sheet_pages(
+        uuid4(),
+        _questions(12),
+        uuid4(),
+        logo_bottom_y_after=logo_bottom_y_after,
+        **options,
+    )
+
+    assert len(pages) == 1
+    assert len(pages[0].boxes) == 12

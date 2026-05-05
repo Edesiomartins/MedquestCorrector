@@ -147,11 +147,12 @@ def question_block_height(
     *,
     title_gap: float | None = None,
     text_bottom_gap: float | None = None,
+    question_prefix: str = "",
 ) -> float:
     """Altura real ocupada por uma questão antes de avançar para a próxima."""
     tg = title_gap if title_gap is not None else QUESTION_TITLE_GAP
     tbg = text_bottom_gap if text_bottom_gap is not None else QUESTION_TEXT_BOTTOM_GAP
-    text_lines = wrap_question_text(text, question_text_width)
+    text_lines = wrap_question_text(f"{question_prefix}{text}", question_text_width)
     return (
         tg
         + (len(text_lines) * QUESTION_TEXT_LINE_GAP)
@@ -174,6 +175,16 @@ def compute_answer_sheet_pages(
     question_text_bottom_gap: float | None = None,
     first_response_line_offset: float | None = None,
     response_bottom_padding: float | None = None,
+    logo_max_height: float | None = None,
+    logo_bottom_gap: float | None = None,
+    header_title_gap: float | None = None,
+    header_subtitle_gap: float | None = None,
+    header_box_h: float | None = None,
+    header_box_bottom_gap: float | None = None,
+    header_divider_below_gap: float | None = None,
+    header_title_font_size: float | None = None,
+    header_subtitle_font_size: float | None = None,
+    inline_question_prompt: bool = False,
 ) -> tuple[list[ManifestPage], int]:
     """
     Simula a paginação de `_draw_sheet` e retorna páginas com boxes de resposta.
@@ -209,20 +220,28 @@ def compute_answer_sheet_pages(
 
     # --- Cabeçalho (espelho exato de _draw_sheet) ---
     if compact_header:
-        title_gap = 6 * mm
-        subtitle_gap = 8 * mm
-        box_h = float(HEADER_STUDENT_BOX_H_COMPACT)
-        box_bottom_gap = 5 * mm
-        divider_gap = float(HEADER_DIVIDER_BELOW_GAP_COMPACT)
+        header_title_gap_eff = header_title_gap if header_title_gap is not None else 6 * mm
+        header_subtitle_gap_eff = header_subtitle_gap if header_subtitle_gap is not None else 8 * mm
+        box_h = float(header_box_h if header_box_h is not None else HEADER_STUDENT_BOX_H_COMPACT)
+        box_bottom_gap = header_box_bottom_gap if header_box_bottom_gap is not None else 5 * mm
+        divider_gap = float(
+            header_divider_below_gap
+            if header_divider_below_gap is not None
+            else HEADER_DIVIDER_BELOW_GAP_COMPACT
+        )
     else:
-        title_gap = 8 * mm
-        subtitle_gap = 12 * mm
-        box_h = float(HEADER_STUDENT_BOX_H_FULL)
-        box_bottom_gap = 8 * mm
-        divider_gap = float(HEADER_DIVIDER_BELOW_GAP_FULL)
+        header_title_gap_eff = header_title_gap if header_title_gap is not None else 8 * mm
+        header_subtitle_gap_eff = header_subtitle_gap if header_subtitle_gap is not None else 12 * mm
+        box_h = float(header_box_h if header_box_h is not None else HEADER_STUDENT_BOX_H_FULL)
+        box_bottom_gap = header_box_bottom_gap if header_box_bottom_gap is not None else 8 * mm
+        divider_gap = float(
+            header_divider_below_gap
+            if header_divider_below_gap is not None
+            else HEADER_DIVIDER_BELOW_GAP_FULL
+        )
 
-    y -= title_gap
-    y -= subtitle_gap
+    y -= header_title_gap_eff
+    y -= header_subtitle_gap_eff
     y -= box_h + box_bottom_gap
 
     current_question_area_top_y = y
@@ -255,6 +274,7 @@ def compute_answer_sheet_pages(
             usable_w,
             title_gap=title_gap,
             text_bottom_gap=text_bottom_gap,
+            question_prefix=f"Questão {q.number} - " if inline_question_prompt else "",
         )
         if y - needed < margin:
             pages.append(current)
@@ -264,10 +284,12 @@ def compute_answer_sheet_pages(
             y -= cont_gap
             current.fiducials = fiducials_for_page(w, h, y + 6 * mm)
 
-        # Baseline do "Questão N"; em seguida o PDF faz `y -= title_gap`.
-        y -= title_gap
-
-        text_lines = wrap_question_text(q.text, usable_w)
+        if inline_question_prompt:
+            text_lines = wrap_question_text(f"Questão {q.number} - {q.text}", usable_w)
+        else:
+            # Baseline do "Questão N"; em seguida o PDF faz `y -= title_gap`.
+            y -= title_gap
+            text_lines = wrap_question_text(q.text, usable_w)
         for _line in text_lines:
             y -= QUESTION_TEXT_LINE_GAP
 
