@@ -14,7 +14,13 @@ from reportlab.pdfgen import canvas
 from app.services.generator.sheet_layout import (
     CONTINUATION_GAP_BELOW_HEADER,
     DEFAULT_RESPONSE_LINES,
+    HEADER_DIVIDER_BELOW_GAP_COMPACT,
+    HEADER_DIVIDER_BELOW_GAP_FULL,
+    HEADER_STUDENT_BOX_H_COMPACT,
+    HEADER_STUDENT_BOX_H_FULL,
     PAGE_TOP_CONTENT_INSET,
+    QR_TOP_PADDING_COMPACT,
+    QR_TOP_PADDING_FULL,
     QUESTION_TEXT_FONT_NAME,
     QUESTION_TEXT_FONT_SIZE,
     QUESTION_TEXT_BOTTOM_GAP,
@@ -280,15 +286,24 @@ def _draw_sheet(
     y -= (8 if compact_header else 12) * mm
 
     c.setFont("Helvetica-Bold", 10)
-    box_h = (18 if compact_header else 22) * mm
+    if compact_header:
+        box_h = float(HEADER_STUDENT_BOX_H_COMPACT)
+        qr_top_pad = QR_TOP_PADDING_COMPACT
+        divider_below_gap = HEADER_DIVIDER_BELOW_GAP_COMPACT
+    else:
+        box_h = float(HEADER_STUDENT_BOX_H_FULL)
+        qr_top_pad = QR_TOP_PADDING_FULL
+        divider_below_gap = HEADER_DIVIDER_BELOW_GAP_FULL
+
     c.setStrokeColor(colors.grey)
     c.setLineWidth(0.5)
-    c.rect(margin, y - box_h, w - 2 * margin, box_h + 2 * mm, stroke=1, fill=0)
+    # Retângulo com altura exata da caixa (sem +2 mm) para o QR caber dentro dos limites.
+    c.rect(margin, y - box_h, w - 2 * margin, box_h, stroke=1, fill=0)
 
     left = margin + 4 * mm
     qr_size = QR_SIZE
     qr_x = left
-    qr_y = y - qr_size - 2 * mm
+    qr_y = y - qr_top_pad - qr_size
     _draw_qr(c, current_qr_payload, qr_x, qr_y, qr_size)
 
     text_left = qr_x + qr_size + 6 * mm
@@ -310,7 +325,7 @@ def _draw_sheet(
     c.setLineWidth(0.3)
     c.line(margin, y, w - margin, y)
     _draw_fiducials(c, w, h, y)
-    y -= (4 if compact_header else 6) * mm
+    y -= divider_below_gap
 
     usable_w = w - 2 * margin
     effective_response_lines = max(1, response_lines)

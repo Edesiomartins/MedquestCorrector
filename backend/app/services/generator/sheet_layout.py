@@ -22,6 +22,15 @@ MARGIN = 2 * cm
 FIDUCIAL_MM = 4 * mm
 FIDUCIAL_OUTER_GAP = 2 * mm
 QR_SIZE = 18 * mm
+# Topo da caixa de identificação até o topo do QR (evita QR “vazar” para fora da caixa).
+QR_TOP_PADDING_COMPACT = 3 * mm
+QR_TOP_PADDING_FULL = 2 * mm
+# Altura da caixa cinza do cabeçalho: deve cobrir QR (18 mm) + margens + linhas de texto (até ~15 mm).
+HEADER_STUDENT_BOX_H_COMPACT = 23 * mm
+HEADER_STUDENT_BOX_H_FULL = 22 * mm
+# Espaço entre a linha divisória (após a caixa) e o baseline de “Questão N”.
+HEADER_DIVIDER_BELOW_GAP_COMPACT = 6 * mm
+HEADER_DIVIDER_BELOW_GAP_FULL = 6 * mm
 # Recuo do primeiro texto útil abaixo do topo.
 PAGE_TOP_CONTENT_INSET = 6 * mm
 # Espaço entre a linha "(cont.)" e o baseline de "Questão N"; inclui o QR no topo.
@@ -202,15 +211,15 @@ def compute_answer_sheet_pages(
     if compact_header:
         title_gap = 6 * mm
         subtitle_gap = 8 * mm
-        box_h = 18 * mm
+        box_h = float(HEADER_STUDENT_BOX_H_COMPACT)
         box_bottom_gap = 5 * mm
-        divider_gap = 4 * mm
+        divider_gap = float(HEADER_DIVIDER_BELOW_GAP_COMPACT)
     else:
         title_gap = 8 * mm
         subtitle_gap = 12 * mm
-        box_h = 22 * mm
+        box_h = float(HEADER_STUDENT_BOX_H_FULL)
         box_bottom_gap = 8 * mm
-        divider_gap = 6 * mm
+        divider_gap = float(HEADER_DIVIDER_BELOW_GAP_FULL)
 
     y -= title_gap
     y -= subtitle_gap
