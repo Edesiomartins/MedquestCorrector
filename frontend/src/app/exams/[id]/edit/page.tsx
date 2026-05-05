@@ -128,6 +128,13 @@ export default function EditExamPage() {
             expected_answer: q.expected_answer,
             max_score: q.max_score,
           });
+        } else if (q.id) {
+          await api.put(`/exams/${examId}/questions/${q.id}`, {
+            question_number: q.question_number,
+            question_text: q.question_text,
+            expected_answer: q.expected_answer,
+            max_score: q.max_score,
+          });
         }
       }
 
@@ -224,7 +231,6 @@ export default function EditExamPage() {
               <select
                 value={q.max_score}
                 onChange={(e) => updateQuestion(idx, "max_score", parseFloat(e.target.value))}
-                disabled={!q._isNew}
                 className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm disabled:opacity-60"
               >
                 <option value={0.25}>0,25</option>
@@ -250,7 +256,6 @@ export default function EditExamPage() {
               onChange={(e) => updateQuestion(idx, "question_text", e.target.value)}
               placeholder="Digite o enunciado da questão..."
               rows={2}
-              disabled={!q._isNew}
               className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-none disabled:opacity-60"
             />
           </div>
@@ -264,7 +269,6 @@ export default function EditExamPage() {
               onChange={(e) => updateQuestion(idx, "expected_answer", e.target.value)}
               placeholder="Digite aqui a resposta esperada..."
               rows={4}
-              disabled={!q._isNew}
               className="w-full bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-none disabled:opacity-60"
             />
           </div>

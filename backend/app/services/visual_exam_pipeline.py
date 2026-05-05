@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
-from app.services.exam_grading_client import grade_discursive_answer
+from app.services.exam_grading_client import grade_discursive_answer, grade_practical_answer
 from app.services.exam_image_preprocess import maybe_crop_answer_regions, normalize_page_image
 from app.services.openrouter_vision_client import extract_answers_from_page_image
 from app.services.pdf_page_renderer import render_pdf_to_images
@@ -58,6 +58,7 @@ def analyze_discursive_exam_pdf(
             page_images_to_process = list(enumerate(page_images, start=1))
 
         rubric_map = _rubric_by_question(rubric)
+        is_practical_exam = _is_practical_exam(rubric, options)
 
         for page_number, page_image in page_images_to_process:
             global_page_index = max(int(page_number) - 1, 0)
@@ -140,7 +141,23 @@ def analyze_discursive_exam_pdf(
                     str(rubric_preview)[:120] if rubric_preview else None,
                 )
                 if question_rubric:
-                    if not _semantic_guard_matches(qnum, question_rubric):
+                    if is_practical_exam:
+                        grade = grade_practical_answer(
+                            {
+                                **question,
+                                "max_score": (question_rubric or {}).get("max_score"),
+                                "student_name": detected_student_name,
+                                "registration": detected_registration,
+                                "global_page_index": global_page_index,
+                                "physical_page_number": physical_page_number,
+                                "correlation_id": correlation_id,
+                            },
+                            question_rubric,
+                            question.get("answer_transcription") or "",
+                            reading_confidence=question.get("reading_confidence") or "media",
+                        )
+                        text_model_used = text_model_used or str(grade.get("model_used") or "practical-rule-based")
+                    elif not _semantic_guard_matches(qnum, question_rubric):
                         message = (
                             f"Possível troca de rubrica para question_number={qnum} "
                             f"(página {physical_page_number})."
@@ -181,31 +198,32 @@ def analyze_discursive_exam_pdf(
                             }
                         )
                         continue
-                    try:
-                        grade = grade_discursive_answer(
-                            {
-                                **question,
-                                "text_model": options.get("text_model"),
-                                "student_name": detected_student_name,
-                                "registration": detected_registration,
-                                "global_page_index": global_page_index,
-                                "physical_page_number": physical_page_number,
-                                "correlation_id": correlation_id,
-                            },
-                            question_rubric,
-                            question.get("answer_transcription") or "",
-                            reading_confidence=question.get("reading_confidence") or "media",
-                        )
-                        text_model_used = text_model_used or str(grade.get("model_used") or "")
-                        if grade.get("fallback_used"):
-                            warnings.append(
-                                f"Fallback textual acionado na página {physical_page_number}, questão {qnum}."
+                    else:
+                        try:
+                            grade = grade_discursive_answer(
+                                {
+                                    **question,
+                                    "text_model": options.get("text_model"),
+                                    "student_name": detected_student_name,
+                                    "registration": detected_registration,
+                                    "global_page_index": global_page_index,
+                                    "physical_page_number": physical_page_number,
+                                    "correlation_id": correlation_id,
+                                },
+                                question_rubric,
+                                question.get("answer_transcription") or "",
+                                reading_confidence=question.get("reading_confidence") or "media",
                             )
-                    except Exception as exc:
-                        message = f"Correção textual falhou na página {physical_page_number}, questão {qnum}: {exc}"
-                        logger.warning(message)
-                        warnings.append(message)
-                        grade = _grading_error(question, str(exc))
+                            text_model_used = text_model_used or str(grade.get("model_used") or "")
+                            if grade.get("fallback_used"):
+                                warnings.append(
+                                    f"Fallback textual acionado na página {physical_page_number}, questão {qnum}."
+                                )
+                        except Exception as exc:
+                            message = f"Correção textual falhou na página {physical_page_number}, questão {qnum}: {exc}"
+                            logger.warning(message)
+                            warnings.append(message)
+                            grade = _grading_error(question, str(exc))
                 elif rubric:
                     warnings.append(f"Rubrica ausente para a questão {qnum} na página {physical_page_number}.")
 
@@ -352,6 +370,12 @@ def _rubric_summary(payload: Any) -> Any:
     if isinstance(payload, dict):
         return {"question_keys": list(payload.keys())[:20]}
     return None
+
+
+def _is_practical_exam(rubric: Any, options: dict | None) -> bool:
+    if isinstance(options, dict) and options.get("is_practical"):
+        return True
+    return isinstance(rubric, dict) and bool(rubric.get("is_practical"))
 
 
 def _compact_question(item: dict) -> dict:

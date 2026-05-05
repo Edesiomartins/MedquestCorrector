@@ -1,4 +1,9 @@
-from app.services.exam_grading_client import _normalize_grading_response, clamp_grade, parse_llm_json_response
+from app.services.exam_grading_client import (
+    _normalize_grading_response,
+    clamp_grade,
+    grade_practical_answer,
+    parse_llm_json_response,
+)
 
 
 def test_parse_llm_json_response_invalid_json_returns_safe_fallback():
@@ -86,3 +91,29 @@ def test_analysis_field_with_missing_required_keys_forces_review():
     assert out["schema_valid"] is False
     assert out["needs_human_review"] is True
     assert any("analysis" in w.lower() for w in out["parse_warnings"])
+
+
+def test_practical_grading_matches_expected_muscle_with_laterality_abbreviation():
+    out = grade_practical_answer(
+        {"number": 1, "reading_confidence": "alta"},
+        {"expected_answer": "Peitoral maior esquerdo", "max_score": 1.0},
+        "m. PeiToral maioR E.",
+        reading_confidence="alta",
+    )
+
+    assert out["score"] == 1.0
+    assert out["verdict"] == "correta"
+    assert out["needs_human_review"] is False
+
+
+def test_practical_grading_rejects_wrong_laterality():
+    out = grade_practical_answer(
+        {"number": 1, "reading_confidence": "alta"},
+        {"expected_answer": "Latissimo do dorso direito", "max_score": 1.0},
+        "m. latissimo do dorso E.",
+        reading_confidence="alta",
+    )
+
+    assert out["score"] == 0.0
+    assert out["verdict"] == "incorreta"
+    assert "lateralidade" in out["justification"].lower()

@@ -75,6 +75,8 @@ type ExamOption = {
   question_count: number;
 };
 
+type ExamMode = 'discursive' | 'practical';
+
 const visionModels = [
   'qwen/qwen2.5-vl-72b-instruct',
   'qwen/qwen2.5-vl-32b-instruct',
@@ -91,6 +93,7 @@ const textModels = [
 
 export default function VisualExamPage() {
   const [file, setFile] = useState<File | null>(null);
+  const [examMode, setExamMode] = useState<ExamMode>('discursive');
   const [exams, setExams] = useState<ExamOption[]>([]);
   const [examId, setExamId] = useState('');
   const [loadingExams, setLoadingExams] = useState(false);
@@ -110,10 +113,10 @@ export default function VisualExamPage() {
     const loadExams = async () => {
       setLoadingExams(true);
       try {
-        const { data } = await api.get<ExamOption[]>('/exams', { params: { practical: false } });
+        const { data } = await api.get<ExamOption[]>('/exams', { params: { practical: examMode === 'practical' } });
         if (cancelled) return;
         setExams(data);
-        if (data.length > 0) setExamId(data[0].id);
+        setExamId(data[0]?.id || '');
       } catch {
         if (cancelled) return;
         setError({ message: 'Não foi possível carregar as provas cadastradas.' });
@@ -125,7 +128,7 @@ export default function VisualExamPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [examMode]);
 
   const studentGroups = useMemo(() => {
     const groups = new Map<string, { label: string; students: StudentResult[] }>();
@@ -219,6 +222,14 @@ export default function VisualExamPage() {
     }
   };
 
+  const handleExamModeChange = (mode: ExamMode) => {
+    setExamMode(mode);
+    setResult(null);
+    setWarnings([]);
+    setError(null);
+    setSelectedStudentKey('');
+  };
+
   const handleExportSpreadsheet = async () => {
     if (!result?.run_id) return;
     setExporting(true);
@@ -247,8 +258,8 @@ export default function VisualExamPage() {
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Correção Visual de Provas Discursivas</h1>
-          <p className="text-slate-500 mt-1">Leitura visual multimodal com correção baseada no gabarito da prova selecionada.</p>
+          <h1 className="text-3xl font-bold tracking-tight">Correção Visual de Provas</h1>
+          <p className="text-slate-500 mt-1">Leitura visual com correção pelo módulo discursivo ou prático da prova selecionada.</p>
         </div>
         <ScanText className="w-9 h-9 text-emerald-600" />
       </div>
@@ -266,8 +277,29 @@ export default function VisualExamPage() {
           </label>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2 md:col-span-2">
+              <span className="text-sm font-medium">Tipo de prova</span>
+              <div className="inline-flex rounded-lg border border-surface-border bg-surface p-1">
+                <button
+                  type="button"
+                  onClick={() => handleExamModeChange('discursive')}
+                  className={`rounded-md px-3 py-1.5 text-sm font-medium ${examMode === 'discursive' ? 'bg-emerald-600 text-white' : 'text-slate-600'}`}
+                >
+                  Discursiva
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExamModeChange('practical')}
+                  className={`rounded-md px-3 py-1.5 text-sm font-medium ${examMode === 'practical' ? 'bg-emerald-600 text-white' : 'text-slate-600'}`}
+                >
+                  Prática
+                </button>
+              </div>
+            </div>
             <label className="space-y-2 md:col-span-2">
-              <span className="text-sm font-medium">Prova (usa respostas esperadas cadastradas)</span>
+              <span className="text-sm font-medium">
+                {examMode === 'practical' ? 'Prova prática' : 'Prova discursiva'} (usa respostas esperadas cadastradas)
+              </span>
               <select
                 value={examId}
                 onChange={(event) => setExamId(event.target.value)}
@@ -275,7 +307,7 @@ export default function VisualExamPage() {
                 className="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm"
               >
                 {exams.length === 0 ? (
-                  <option value="">Nenhuma prova cadastrada</option>
+                  <option value="">Nenhuma prova {examMode === 'practical' ? 'prática' : 'discursiva'} cadastrada</option>
                 ) : (
                   exams.map((exam) => (
                     <option key={exam.id} value={exam.id}>
@@ -293,7 +325,12 @@ export default function VisualExamPage() {
             </label>
             <label className="space-y-2">
               <span className="text-sm font-medium">Modelo textual</span>
-              <select value={textModel} onChange={(event) => setTextModel(event.target.value)} className="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm">
+              <select
+                value={textModel}
+                onChange={(event) => setTextModel(event.target.value)}
+                disabled={examMode === 'practical'}
+                className="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm disabled:opacity-60"
+              >
                 {textModels.map((model) => <option key={model} value={model}>{model}</option>)}
               </select>
             </label>
@@ -340,7 +377,7 @@ export default function VisualExamPage() {
 
         <button type="submit" disabled={loading} className="btn-primary inline-flex items-center gap-2 disabled:opacity-60">
           {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileUp className="w-5 h-5" />}
-          <span>Analisar prova discursiva</span>
+          <span>{examMode === 'practical' ? 'Analisar prova prática' : 'Analisar prova discursiva'}</span>
         </button>
       </form>
 

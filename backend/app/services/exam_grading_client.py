@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -66,6 +67,100 @@ Não inclua campos extras.
 
 class OpenRouterGradingError(RuntimeError):
     pass
+
+
+def grade_practical_answer(
+    question: dict,
+    rubric: dict,
+    student_answer: str,
+    reading_confidence: str = "media",
+) -> dict:
+    """Corrige prova prática por comparação direta com o gabarito esperado."""
+    qnum = _to_int(question.get("number") or question.get("question_number"), 0)
+    max_score = _to_float(question.get("max_score") or rubric.get("max_score") or rubric.get("valor") or 1.0, 1.0)
+    expected_raw = str(
+        rubric.get("expected_answer")
+        or rubric.get("rubric")
+        or rubric.get("answer")
+        or rubric.get("resposta")
+        or ""
+    ).strip()
+    answer_raw = str(student_answer or question.get("answer_transcription") or "").strip()
+    confidence = str(reading_confidence or question.get("reading_confidence") or "media").lower()
+
+    if not expected_raw:
+        return {
+            "question_number": qnum,
+            "score": None,
+            "max_score": max_score,
+            "verdict": "sem_rubrica",
+            "justification": "Gabarito prático não informado para esta questão.",
+            "detected_concepts": [],
+            "missing_concepts": [],
+            "needs_human_review": True,
+            "review_reason": "Gabarito prático ausente.",
+            "model_used": "practical-rule-based",
+        }
+
+    if not answer_raw:
+        return {
+            "question_number": qnum,
+            "score": 0.0,
+            "max_score": max_score,
+            "verdict": "sem_resposta",
+            "justification": f"Resposta em branco. Esperado: {expected_raw}.",
+            "detected_concepts": [],
+            "missing_concepts": [expected_raw],
+            "needs_human_review": confidence == "baixa",
+            "review_reason": "Leitura visual com baixa confiança." if confidence == "baixa" else "",
+            "model_used": "practical-rule-based",
+        }
+
+    expected_variants = _expected_answer_variants(expected_raw)
+    answer_norm = _normalize_practical_answer(answer_raw)
+    best_expected = max(expected_variants, key=lambda item: _practical_similarity(answer_norm, item), default="")
+    best_similarity = _practical_similarity(answer_norm, best_expected) if best_expected else 0.0
+    laterality_ok = _laterality_compatible(answer_raw, expected_raw)
+    exactish = bool(best_expected) and (
+        best_expected in answer_norm
+        or answer_norm in best_expected
+        or best_similarity >= 0.86
+    )
+    structure_match = bool(best_expected) and _practical_similarity(
+        _without_laterality(answer_norm),
+        _without_laterality(best_expected),
+    ) >= 0.86
+
+    is_correct = exactish and laterality_ok
+    needs_review = confidence == "baixa" or (not is_correct and best_similarity >= 0.72)
+    score = max_score if is_correct else 0.0
+    verdict = "correta" if is_correct else "incorreta"
+    if not laterality_ok and structure_match:
+        reason = "Estrutura compatível, mas lateralidade divergente."
+    elif is_correct:
+        reason = "Resposta prática confere com o gabarito esperado."
+    else:
+        reason = f"Resposta prática não confere com o gabarito esperado: {expected_raw}."
+
+    return {
+        "question_number": qnum,
+        "score": score,
+        "max_score": max_score,
+        "verdict": verdict,
+        "justification": reason,
+        "detected_concepts": [expected_raw] if is_correct else [],
+        "missing_concepts": [] if is_correct else [expected_raw],
+        "needs_human_review": needs_review,
+        "review_reason": (
+            "Leitura visual com baixa confiança."
+            if confidence == "baixa"
+            else ("Resposta próxima ao gabarito; revisar possível erro de OCR." if needs_review else "")
+        ),
+        "model_used": "practical-rule-based",
+        "similarity": round(best_similarity, 3),
+        "expected_answer": expected_raw,
+        "normalized_student_answer": answer_norm,
+    }
 
 
 def grade_discursive_answer(
@@ -524,3 +619,67 @@ def _normalize_text(value: str) -> str:
     lowered = re.sub(r"[^a-z0-9áàâãéèêíïóôõöúçñ\s]", " ", lowered)
     lowered = re.sub(r"\s+", " ", lowered).strip()
     return lowered
+
+
+def _strip_accents(value: str) -> str:
+    return "".join(
+        char for char in unicodedata.normalize("NFD", str(value or ""))
+        if unicodedata.category(char) != "Mn"
+    )
+
+
+def _normalize_practical_answer(value: str) -> str:
+    text = _strip_accents(value).lower()
+    text = re.sub(r"\b(m|musculo|músculo)\.?\b", " ", text)
+    text = re.sub(r"\besq(?:\.|uerda|uerdo)?\b", " esquerdo ", text)
+    text = re.sub(r"\bdir(?:\.|eita|eito)?\b", " direito ", text)
+    text = re.sub(r"\be\b", " esquerdo ", text)
+    text = re.sub(r"\bd\b", " direito ", text)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _expected_answer_variants(expected: str) -> list[str]:
+    parts = re.split(r"\s*(?:;|\||/|\n|, ou | ou )\s*", expected)
+    variants = [_normalize_practical_answer(part) for part in parts if str(part).strip()]
+    normalized_full = _normalize_practical_answer(expected)
+    if normalized_full and normalized_full not in variants:
+        variants.append(normalized_full)
+    return [item for item in variants if item]
+
+
+def _practical_similarity(answer_norm: str, expected_norm: str) -> float:
+    if not answer_norm or not expected_norm:
+        return 0.0
+    ratio = SequenceMatcher(None, answer_norm, expected_norm).ratio()
+    answer_tokens = set(answer_norm.split())
+    expected_tokens = set(expected_norm.split())
+    overlap = len(answer_tokens & expected_tokens) / max(1, len(expected_tokens))
+    return max(ratio, overlap)
+
+
+def _laterality_compatible(answer: str, expected: str) -> bool:
+    expected_lat = _extract_laterality(expected)
+    if not expected_lat:
+        return True
+    answer_lat = _extract_laterality(answer)
+    if not answer_lat:
+        return True
+    return answer_lat == expected_lat
+
+
+def _extract_laterality(value: str) -> str:
+    text = _normalize_practical_answer(value)
+    has_left = " esquerdo" in f" {text}" or " esquerda" in f" {text}"
+    has_right = " direito" in f" {text}" or " direita" in f" {text}"
+    if has_left and not has_right:
+        return "left"
+    if has_right and not has_left:
+        return "right"
+    return ""
+
+
+def _without_laterality(value: str) -> str:
+    text = re.sub(r"\b(esquerdo|esquerda|direito|direita)\b", " ", value)
+    return re.sub(r"\s+", " ", text).strip()

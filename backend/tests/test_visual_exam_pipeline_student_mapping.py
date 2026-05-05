@@ -226,3 +226,49 @@ def test_rubric_mapping_uses_question_number_not_array_index(monkeypatch, tmp_pa
         options={},
     )
     assert result["status"] == "success"
+
+
+def test_practical_exam_uses_expected_answer_without_discursive_llm(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "prova_pratica.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr("app.services.visual_exam_pipeline.render_pdf_to_images", lambda *_args, **_kwargs: ["page-1"])
+    monkeypatch.setattr("app.services.visual_exam_pipeline.normalize_page_image", lambda image: image)
+    monkeypatch.setattr("app.services.visual_exam_pipeline.maybe_crop_answer_regions", lambda _image: {"regions": []})
+    monkeypatch.setattr(
+        "app.services.visual_exam_pipeline.extract_answers_from_page_image",
+        lambda *_args, **_kwargs: {
+            "student": {"name": "ALUNO 01", "registration": "1", "class": "P1"},
+            "physical_page": 1,
+            "questions": [
+                {"number": 1, "answer_transcription": "m. PeiToral maioR E.", "reading_confidence": "alta"},
+                {"number": 2, "answer_transcription": "m. orbicular da boca", "reading_confidence": "alta"},
+            ],
+            "model_used": "vision-mock",
+            "fallback_used": False,
+        },
+    )
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("corretor discursivo não deve ser chamado em prova prática")
+
+    monkeypatch.setattr("app.services.visual_exam_pipeline.grade_discursive_answer", fail_if_called)
+
+    result = analyze_discursive_exam_pdf(
+        str(pdf_path),
+        rubric={
+            "is_practical": True,
+            "questions": [
+                {"number": 1, "prompt": "Identifique", "expected_answer": "Peitoral maior esquerdo", "max_score": 1.0},
+                {"number": 2, "prompt": "Identifique", "expected_answer": "Orbicular da boca", "max_score": 1.0},
+            ],
+        },
+        options={"is_practical": True},
+    )
+
+    grades = {
+        q["question_number"]: q["grade"]
+        for q in result["students"][0]["questions"]
+    }
+    assert grades[1]["score"] == 1.0
+    assert grades[2]["score"] == 1.0
+    assert grades[1]["model_used"] == "practical-rule-based"

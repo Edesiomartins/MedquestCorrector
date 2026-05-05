@@ -303,6 +303,29 @@ def add_question(exam_id: UUID, q_in: ExamQuestionCreate, db: Session = Depends(
     return q
 
 
+@router.put("/{exam_id}/questions/{question_id}", response_model=ExamQuestionResponse)
+def update_question(
+    exam_id: UUID,
+    question_id: UUID,
+    q_in: ExamQuestionCreate,
+    db: Session = Depends(get_db),
+):
+    q = db.query(ExamQuestion).filter(
+        ExamQuestion.id == question_id, ExamQuestion.exam_id == exam_id
+    ).first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Questão não encontrada.")
+
+    q.question_number = q_in.question_number
+    q.question_text = q_in.question_text
+    q.expected_answer = q_in.expected_answer
+    q.correction_criteria = q_in.correction_criteria
+    q.max_score = q_in.max_score
+    db.commit()
+    db.refresh(q)
+    return q
+
+
 @router.get("/{exam_id}/answer-sheets")
 def download_answer_sheets(exam_id: UUID, db: Session = Depends(get_db)):
     return _build_answer_sheets_response(exam_id=exam_id, db=db)

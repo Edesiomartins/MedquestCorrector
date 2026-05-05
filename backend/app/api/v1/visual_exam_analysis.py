@@ -84,6 +84,7 @@ async def analyze_discursive_pdf(
         rubric_payload = {
             "exam_id": str(exam.id),
             "exam_name": exam.name,
+            "is_practical": bool(exam.is_practical),
             "questions": [
                 {
                     "number": q.question_number,
@@ -122,6 +123,7 @@ async def analyze_discursive_pdf(
                 "text_model": text_model,
                 "process_pages": process_pages,
                 "run_id": str(run_id),
+                "is_practical": bool(exam.is_practical),
             },
         )
         raw_students = result.pop("_raw_students", [])
