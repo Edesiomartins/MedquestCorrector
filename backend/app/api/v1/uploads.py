@@ -12,6 +12,7 @@ from app.core.storage import write_batch_pdf
 from app.services.batch_results_cleanup import clear_batch_grading_results
 from app.models.exam import Exam
 from app.models.pipeline import UploadBatch, BatchStatus
+from app.models.user import User
 from app.schemas.upload import BatchResponse, BatchStatusResponse
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -26,6 +27,7 @@ async def upload_batch(
     exam_id: UUID = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Apenas arquivos PDF são aceitos.")
@@ -52,6 +54,7 @@ async def upload_batch(
     new_batch = UploadBatch(
         id=batch_id,
         exam_id=exam_id,
+        user_id=current_user.id,
         file_url=file_url,
         status=BatchStatus.PENDING,
     )
