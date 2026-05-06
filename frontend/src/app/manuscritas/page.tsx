@@ -474,9 +474,9 @@ export default function VisualExamPage() {
       </form>
 
       {result && (
-        <div className="glass-panel rounded-xl overflow-hidden">
-          <div className="p-5 border-b border-surface-border flex justify-between gap-4">
-            <div>
+        <div className="glass-panel w-full min-w-0 rounded-xl overflow-hidden">
+          <div className="p-5 border-b border-surface-border flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
               <h2 className="text-lg font-bold">{result.pdf_name}</h2>
               <p className="text-sm text-slate-500">{result.pages_processed} página(s) processada(s)</p>
               <label className="mt-2 inline-flex items-center gap-2 text-xs text-slate-600">
@@ -504,12 +504,12 @@ export default function VisualExamPage() {
               </div>
             )}
           </div>
-          <div className="px-5 py-4 border-b border-surface-border flex items-center gap-4">
+          <div className="px-5 py-4 border-b border-surface-border flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
             <label className="text-sm font-medium">Aluno detectado</label>
             <select
               value={effectiveStudentKey}
               onChange={(event) => setSelectedStudentKey(event.target.value)}
-              className="rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm min-w-72"
+              className="w-full min-w-0 rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm sm:w-auto sm:min-w-72"
             >
               {studentGroups.map((group) => (
                 <option key={group.key} value={group.key}>
@@ -525,8 +525,8 @@ export default function VisualExamPage() {
             </div>
           )}
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
+          <div className="w-full min-w-0 overflow-x-auto overscroll-x-contain">
+            <table className="min-w-[1720px] table-fixed border-collapse text-left text-sm">
               <thead>
                 <tr className="bg-slate-50/70 dark:bg-slate-800/40 text-slate-500 uppercase text-xs">
                   <th className="px-4 py-3">Aluno</th>
