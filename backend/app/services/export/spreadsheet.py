@@ -48,7 +48,7 @@ def export_results_xlsx(
     """
     Gera um arquivo .xlsx com as notas.
 
-    questions: [{"number": 1, "text": "...", "max_score": 1.0}, ...]
+    questions: [{"number": 1, "text": "...", "max_score": 1.0, "expected_answer": "..."}, ...]
     results: [{
         "student_name": str,
         "registration_number": str,
@@ -71,6 +71,11 @@ def export_results_xlsx(
         bottom=Side(style="thin"),
     )
     center = Alignment(horizontal="center", vertical="center")
+    question_lookup = {
+        int(q.get("number")): q
+        for q in questions
+        if isinstance(q.get("number"), int) or str(q.get("number") or "").isdigit()
+    }
 
     headers = ["Matrícula", "Nome", "Curso", "Turma", "Nota final", "Revisão necessária", "Motivo da revisão"]
 
@@ -128,8 +133,8 @@ def export_results_xlsx(
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
 
     if include_details:
-        _add_question_detail_sheet(wb, results, thin_border, header_font, header_fill, center)
-        _add_review_sheet(wb, results, thin_border, header_font, header_fill, center)
+        _add_question_detail_sheet(wb, results, question_lookup, thin_border, header_font, header_fill, center)
+        _add_review_sheet(wb, results, question_lookup, thin_border, header_font, header_fill, center)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -146,7 +151,19 @@ def _write_header(ws, headers, header_font, header_fill, thin_border, center):
         cell.border = thin_border
 
 
-def _add_question_detail_sheet(wb, results, thin_border, header_font, header_fill, center):
+def _expected_answer_for(detail: dict, question_lookup: dict[int, dict]) -> str:
+    direct = detail.get("expected_answer") or detail.get("answer_key") or detail.get("rubric_expected_answer")
+    if direct:
+        return str(direct)
+    try:
+        question_number = int(detail.get("question_number"))
+    except (TypeError, ValueError):
+        return ""
+    question = question_lookup.get(question_number) or {}
+    return str(question.get("expected_answer") or question.get("answer_key") or "")
+
+
+def _add_question_detail_sheet(wb, results, question_lookup, thin_border, header_font, header_fill, center):
     ws = wb.create_sheet("Detalhamento por Questão")
     headers = [
         "Matrícula",
@@ -155,6 +172,7 @@ def _add_question_detail_sheet(wb, results, thin_border, header_font, header_fil
         "Nota",
         "Veredito",
         "Comentário",
+        "Resposta esperada",
         "Transcrição",
         "Revisão necessária",
         "Motivo da revisão",
@@ -178,6 +196,7 @@ def _add_question_detail_sheet(wb, results, thin_border, header_font, header_fil
                 detail.get("score"),
                 detail.get("verdict", ""),
                 detail.get("comment", ""),
+                _expected_answer_for(detail, question_lookup),
                 detail.get("transcription", ""),
                 "sim" if detail.get("needs_review") else "não",
                 friendly,
@@ -187,16 +206,18 @@ def _add_question_detail_sheet(wb, results, thin_border, header_font, header_fil
             row_idx += 1
     ws.column_dimensions["F"].width = 44
     ws.column_dimensions["G"].width = 60
-    ws.column_dimensions["I"].width = 44
+    ws.column_dimensions["H"].width = 60
+    ws.column_dimensions["J"].width = 44
 
 
-def _add_review_sheet(wb, results, thin_border, header_font, header_fill, center):
+def _add_review_sheet(wb, results, question_lookup, thin_border, header_font, header_fill, center):
     ws = wb.create_sheet("Revisões Necessárias")
     headers = [
         "Matrícula",
         "Nome",
         "Questão",
         "Nota sugerida",
+        "Resposta esperada",
         "Motivo amigável",
         "Detalhe técnico resumido",
         "Página física",
@@ -222,6 +243,7 @@ def _add_review_sheet(wb, results, thin_border, header_font, header_fill, center
                 r.get("student_name", ""),
                 detail.get("question_number"),
                 detail.get("score"),
+                _expected_answer_for(detail, question_lookup),
                 friendly,
                 str(detail.get("technical_detail") or detail.get("review_reason") or "")[:500],
                 detail.get("physical_page"),
@@ -231,5 +253,6 @@ def _add_review_sheet(wb, results, thin_border, header_font, header_fill, center
             for col_idx, value in enumerate(values, 1):
                 ws.cell(row=row_idx, column=col_idx, value=value).border = thin_border
             row_idx += 1
-    ws.column_dimensions["E"].width = 44
-    ws.column_dimensions["F"].width = 60
+    ws.column_dimensions["E"].width = 60
+    ws.column_dimensions["F"].width = 44
+    ws.column_dimensions["G"].width = 60

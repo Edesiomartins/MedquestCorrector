@@ -266,7 +266,12 @@ def export_batch(
         )
 
         q_dicts = [
-            {"number": q.question_number, "text": q.question_text, "max_score": q.max_score}
+            {
+                "number": q.question_number,
+                "text": q.question_text,
+                "max_score": q.max_score,
+                "expected_answer": q.expected_answer,
+            }
             for q in questions
         ]
 
@@ -287,6 +292,7 @@ def export_batch(
                             "score": _effective_question_score(s),
                             "verdict": "",
                             "comment": s.ai_justification or "",
+                            "expected_answer": q.expected_answer,
                             "transcription": s.extracted_answer_text or "",
                             "needs_review": bool(s.requires_manual_review),
                             "review_reason": s.manual_review_reason or "",

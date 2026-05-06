@@ -175,6 +175,7 @@ def analyze_discursive_exam_pdf(
                             "review_reason": message,
                             "schema_valid": False,
                             "parse_warnings": [message],
+                            "expected_answer": str((question_rubric or {}).get("expected_answer") or ""),
                         }
                         text_model_used = text_model_used or str(options.get("text_model") or "")
                         page_questions.append(
@@ -229,6 +230,9 @@ def analyze_discursive_exam_pdf(
 
                 if question.get("reading_confidence") == "baixa" or grade.get("needs_human_review"):
                     logger.info("Página %d, questão %d precisa de revisão humana.", physical_page_number, qnum)
+
+                if question_rubric and not grade.get("expected_answer"):
+                    grade["expected_answer"] = str((question_rubric or {}).get("expected_answer") or "")
 
                 page_questions.append(
                     {
@@ -383,6 +387,7 @@ def _compact_question(item: dict) -> dict:
         "number": item.get("number") or item.get("question_number") or item.get("questao"),
         "prompt": item.get("prompt") or item.get("question") or item.get("enunciado") or "",
         "max_score": item.get("max_score") or item.get("valor") or 1.0,
+        "expected_answer": item.get("expected_answer") or item.get("rubric") or "",
     }
 
 
@@ -427,6 +432,7 @@ def _public_grade(grade: dict) -> dict:
         "needs_human_review": bool(grade.get("needs_human_review", False)),
         "review_reason": grade.get("review_reason", ""),
         "model_used": grade.get("model_used"),
+        "expected_answer": grade.get("expected_answer", ""),
     }
 
 

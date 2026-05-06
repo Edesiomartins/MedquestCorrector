@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -34,6 +35,17 @@ class KnownPipelineError(Exception):
         self.user_message = user_message
         self.detail = detail
         self.stage = stage
+
+
+class VisualAnswerUpdate(BaseModel):
+    page_number: int
+    question_number: int
+    answer_transcription: str | None = None
+    score: float | None = None
+    verdict: str | None = None
+    justification: str | None = None
+    needs_human_review: bool = False
+    review_reason: str | None = None
 
 
 @router.post("/analyze-discursive-pdf", status_code=status.HTTP_200_OK)
@@ -257,6 +269,37 @@ def _persist_visual_answers(db: Session, run_id: uuid.UUID, students: list[dict]
             )
 
 
+@router.patch("/runs/{run_id}/answers", status_code=status.HTTP_200_OK)
+def update_visual_answer(
+    run_id: uuid.UUID,
+    payload: VisualAnswerUpdate,
+    db: Session = Depends(get_db),
+):
+    answer = (
+        db.query(VisualExamAnswer)
+        .filter(
+            VisualExamAnswer.run_id == run_id,
+            VisualExamAnswer.page_number == payload.page_number,
+            VisualExamAnswer.question_number == payload.question_number,
+        )
+        .first()
+    )
+    if not answer:
+        raise HTTPException(status_code=404, detail="Resposta visual não encontrada.")
+
+    if payload.answer_transcription is not None:
+        answer.answer_transcription = payload.answer_transcription
+    answer.score = payload.score
+    if payload.verdict is not None:
+        answer.verdict = payload.verdict
+    if payload.justification is not None:
+        answer.justification = payload.justification
+    answer.needs_human_review = payload.needs_human_review
+    answer.review_reason = payload.review_reason or None
+    db.commit()
+    return {"status": "ok"}
+
+
 @router.get("/runs/{run_id}/export")
 def export_visual_run(
     run_id: uuid.UUID,
@@ -300,8 +343,21 @@ def export_visual_run(
                 },
             )
 
+        expected_by_question = {
+            int(a.question_number): _expected_answer_from_raw(a.raw_grading_json)
+            for a in answers
+            if _expected_answer_from_raw(a.raw_grading_json)
+        }
         question_numbers = sorted({int(a.question_number) for a in answers})
-        questions = [{"number": qn, "text": "", "max_score": None} for qn in question_numbers]
+        questions = [
+            {
+                "number": qn,
+                "text": "",
+                "max_score": None,
+                "expected_answer": expected_by_question.get(qn, ""),
+            }
+            for qn in question_numbers
+        ]
 
         grouped: dict[str, dict] = {}
         for a in answers:
@@ -341,6 +397,7 @@ def export_visual_run(
                     "score": score_val,
                     "verdict": a.verdict or "",
                     "comment": a.justification or "",
+                    "expected_answer": expected_by_question.get(int(a.question_number), ""),
                     "transcription": a.answer_transcription or "",
                     "needs_review": bool(a.needs_human_review),
                     "review_reason": a.review_reason or "",
@@ -390,6 +447,18 @@ def export_visual_run(
 def _safe_pdf_name(filename: str) -> str:
     name = Path(filename).name.replace("\\", "_").replace("/", "_")
     return name if name.lower().endswith(".pdf") else f"{name}.pdf"
+
+
+def _expected_answer_from_raw(raw: str | None) -> str:
+    if not raw:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    return str(parsed.get("expected_answer") or parsed.get("rubric_expected_answer") or "")
 
 
 def _infer_error_code(detail: str) -> str:

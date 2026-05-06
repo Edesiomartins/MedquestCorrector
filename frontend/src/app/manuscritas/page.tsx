@@ -12,6 +12,7 @@ type Grade = {
   justification: string;
   needs_human_review: boolean;
   review_reason?: string;
+  expected_answer?: string;
 };
 
 type QuestionResult = {
@@ -107,6 +108,9 @@ export default function VisualExamPage() {
   const [exporting, setExporting] = useState(false);
   const [includeDetailsExport, setIncludeDetailsExport] = useState(true);
   const [showErrorDetails, setShowErrorDetails] = useState(false);
+  const [editingRowKey, setEditingRowKey] = useState('');
+  const [savingReviewKey, setSavingReviewKey] = useState('');
+  const [reviewDrafts, setReviewDrafts] = useState<Record<string, { transcription: string; score: string; justification: string; reviewReason: string }>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -251,6 +255,94 @@ export default function VisualExamPage() {
       setError(extractApiError(err, 'Falha ao exportar planilha.'));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const rowKey = (student: StudentResult, question: QuestionResult) =>
+    `${student.physical_page || student.page}-${question.question_number || question.number}`;
+
+  const beginReview = (student: StudentResult, question: QuestionResult) => {
+    const key = rowKey(student, question);
+    setReviewDrafts((prev) => ({
+      ...prev,
+      [key]: prev[key] || {
+        transcription: question.extracted_answer || question.answer_transcription || '',
+        score: question.grade?.score != null ? String(question.grade.score) : '',
+        justification: question.grade?.justification || question.reading_notes || '',
+        reviewReason: question.grade?.review_reason || '',
+      },
+    }));
+    setEditingRowKey(key);
+  };
+
+  const updateDraft = (key: string, field: keyof (typeof reviewDrafts)[string], value: string) => {
+    setReviewDrafts((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], [field]: value },
+    }));
+  };
+
+  const applyLocalReview = (student: StudentResult, question: QuestionResult, draft: (typeof reviewDrafts)[string]) => {
+    const pageNumber = student.physical_page || student.page;
+    const questionNumber = question.question_number || question.number;
+    const numericScore = draft.score.trim() === '' ? null : Number(draft.score);
+    setResult((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        students: prev.students.map((item) => {
+          if ((item.physical_page || item.page) !== pageNumber) return item;
+          return {
+            ...item,
+            questions: item.questions.map((q) => {
+              if ((q.question_number || q.number) !== questionNumber) return q;
+              return {
+                ...q,
+                extracted_answer: draft.transcription,
+                answer_transcription: draft.transcription,
+                grade: {
+                  ...q.grade,
+                  score: Number.isFinite(numericScore) ? numericScore : null,
+                  justification: draft.justification,
+                  needs_human_review: false,
+                  review_reason: draft.reviewReason,
+                },
+              };
+            }),
+          };
+        }),
+      };
+    });
+  };
+
+  const saveReview = async (student: StudentResult, question: QuestionResult) => {
+    if (!result?.run_id) return;
+    const key = rowKey(student, question);
+    const draft = reviewDrafts[key];
+    if (!draft) return;
+    const pageNumber = student.physical_page || student.page;
+    const questionNumber = question.question_number || question.number;
+    const numericScore = draft.score.trim() === '' ? null : Number(draft.score);
+
+    setSavingReviewKey(key);
+    setError(null);
+    try {
+      await visualExamAnalysisApi.patch(`/runs/${result.run_id}/answers`, {
+        page_number: pageNumber,
+        question_number: questionNumber,
+        answer_transcription: draft.transcription,
+        score: Number.isFinite(numericScore) ? numericScore : null,
+        verdict: question.grade?.verdict || '',
+        justification: draft.justification,
+        needs_human_review: false,
+        review_reason: draft.reviewReason || null,
+      });
+      applyLocalReview(student, question, draft);
+      setEditingRowKey('');
+    } catch (err: unknown) {
+      setError(extractApiError(err, 'Falha ao salvar revisão.'));
+    } finally {
+      setSavingReviewKey('');
     }
   };
 
@@ -447,6 +539,7 @@ export default function VisualExamPage() {
                   <th className="px-4 py-3">OCR conf.</th>
                   <th className="px-4 py-3">Nota</th>
                   <th className="px-4 py-3">Veredito</th>
+                  <th className="px-4 py-3 min-w-72">Padrão</th>
                   <th className="px-4 py-3 min-w-72">Justificativa</th>
                   <th className="px-4 py-3">Revisão</th>
                 </tr>
@@ -456,14 +549,27 @@ export default function VisualExamPage() {
                   const lowReading = question.reading_confidence === 'baixa';
                   const zeroScore = question.grade?.score === 0;
                   const review = question.grade?.needs_human_review || lowReading;
+                  const key = rowKey(student, question);
+                  const editing = editingRowKey === key;
+                  const draft = reviewDrafts[key];
                   return (
-                    <tr key={`${student.physical_page || student.page}-${question.question_number || question.number}`} className={review ? 'bg-amber-50/60 dark:bg-amber-500/10' : ''}>
+                    <tr key={key} className={review ? 'bg-amber-50/60 dark:bg-amber-500/10' : ''}>
                       <td className="px-4 py-3 font-medium">{student.detected_student_name || student.student.name || 'Não identificado'}</td>
                       <td className="px-4 py-3">{student.detected_registration || student.student.registration || '-'}</td>
                       <td className="px-4 py-3">{student.student.class || '-'}</td>
                       <td className="px-4 py-3">{student.physical_page || student.page}</td>
                       <td className="px-4 py-3">{question.question_number || question.number}</td>
-                      <td className="px-4 py-3 whitespace-pre-wrap">{question.extracted_answer || question.answer_transcription || '[sem resposta]'}</td>
+                      <td className="px-4 py-3 whitespace-pre-wrap">
+                        {editing && draft ? (
+                          <textarea
+                            value={draft.transcription}
+                            onChange={(event) => updateDraft(key, 'transcription', event.target.value)}
+                            className="min-h-24 w-full rounded-lg border border-surface-border bg-white px-3 py-2 text-sm"
+                          />
+                        ) : (
+                          question.extracted_answer || question.answer_transcription || '[sem resposta]'
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <span className={`rounded px-2 py-1 text-xs font-medium ${lowReading ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
                           {question.reading_confidence}
@@ -471,20 +577,64 @@ export default function VisualExamPage() {
                       </td>
                       <td className="px-4 py-3">{question.ocr_confidence != null ? `${Math.round(question.ocr_confidence * 100)}%` : '-'}</td>
                       <td className={`px-4 py-3 font-semibold ${zeroScore ? 'text-red-700' : ''}`}>
-                        {question.grade?.score ?? '-'} / {question.grade?.max_score ?? '-'}
+                        {editing && draft ? (
+                          <input
+                            type="number"
+                            min={0}
+                            max={question.grade?.max_score ?? undefined}
+                            step={0.25}
+                            value={draft.score}
+                            onChange={(event) => updateDraft(key, 'score', event.target.value)}
+                            className="w-24 rounded-lg border border-surface-border bg-white px-3 py-2 text-sm"
+                          />
+                        ) : (
+                          <>{question.grade?.score ?? '-'} / {question.grade?.max_score ?? '-'}</>
+                        )}
                       </td>
                       <td className="px-4 py-3">{question.grade?.verdict || '-'}</td>
-                      <td className="px-4 py-3">{question.grade?.justification || question.reading_notes || '-'}</td>
+                      <td className="px-4 py-3 whitespace-pre-wrap">{question.grade?.expected_answer || '-'}</td>
+                      <td className="px-4 py-3">
+                        {editing && draft ? (
+                          <textarea
+                            value={draft.justification}
+                            onChange={(event) => updateDraft(key, 'justification', event.target.value)}
+                            className="min-h-24 w-full rounded-lg border border-surface-border bg-white px-3 py-2 text-sm"
+                          />
+                        ) : (
+                          question.grade?.justification || question.reading_notes || '-'
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <div className="mb-2 text-xs font-medium">{review ? 'sim' : 'não'}</div>
-                        <button className={`rounded-lg px-3 py-1.5 text-xs font-medium ${review ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
-                          revisar manualmente
-                        </button>
-                        <div className="mt-2 flex flex-col gap-1">
-                          <button className="text-xs text-slate-600 underline">editar transcrição</button>
-                          <button className="text-xs text-slate-600 underline">editar nota sugerida</button>
-                          <button className="text-xs text-emerald-700 underline">salvar correção final</button>
-                        </div>
+                        {editing && draft ? (
+                          <div className="flex min-w-52 flex-col gap-2">
+                            <textarea
+                              value={draft.reviewReason}
+                              onChange={(event) => updateDraft(key, 'reviewReason', event.target.value)}
+                              placeholder="Motivo/observação da revisão"
+                              className="min-h-20 rounded-lg border border-surface-border bg-white px-3 py-2 text-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void saveReview(student, question)}
+                              disabled={savingReviewKey === key}
+                              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+                            >
+                              {savingReviewKey === key ? 'salvando...' : 'salvar correção final'}
+                            </button>
+                            <button type="button" onClick={() => setEditingRowKey('')} className="text-xs text-slate-600 underline">
+                              cancelar
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => beginReview(student, question)}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${review ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}
+                          >
+                            revisar manualmente
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
