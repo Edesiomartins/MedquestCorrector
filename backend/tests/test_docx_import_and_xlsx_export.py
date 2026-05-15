@@ -52,7 +52,7 @@ def test_humanize_review_reason_hides_technical_json_from_main_reason():
     assert reason == "Falha no formato da resposta da IA. Conferir nota sugerida."
 
 
-def test_export_results_xlsx_creates_three_clean_sheets():
+def test_export_results_xlsx_summary_student_and_review_sheets():
     data = export_results_xlsx(
         "Prova",
         [{"number": 1, "max_score": 1}, {"number": 2, "max_score": 1}, {"number": 3, "max_score": 1}],
@@ -81,7 +81,16 @@ def test_export_results_xlsx_creates_three_clean_sheets():
         ],
     )
     wb = load_workbook(BytesIO(data))
-    assert wb.sheetnames == ["Resultado Final", "Detalhamento por Questão", "Revisões Necessárias"]
+    assert wb.sheetnames[0] == "Resultado Final"
+    assert wb.sheetnames[-1] == "Revisões Necessárias"
+    assert len(wb.sheetnames) == 3
     ws = wb["Resultado Final"]
     assert ws["E3"].value == 0.5
     assert "JSON recuperado" not in str(ws["G3"].value)
+    alum = wb[wb.sheetnames[1]]
+    assert alum["A5"].value == "Matrícula"
+    assert alum["B5"].value == "001"
+    assert alum["A17"].value == "Questão"
+    assert alum["A18"].value == 1
+    assert alum["C18"].value == "parcial"
+
