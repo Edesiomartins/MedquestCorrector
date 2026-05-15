@@ -86,10 +86,13 @@ const visionModels = [
 ];
 
 const textModels = [
+  'deepseek/deepseek-v4-flash:free',
+  'qwen/qwen3-235b-a22b-2507',
+  'qwen/qwen2.5-72b-instruct',
+  'qwen/qwen2.5-32b-instruct',
   'openai/gpt-oss-120b',
   'openai/gpt-oss-20b',
   'meta-llama/llama-3.1-8b-instruct',
-  'qwen/qwen3-235b-a22b-2507',
 ];
 
 export default function VisualExamPage() {

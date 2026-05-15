@@ -397,7 +397,7 @@ def _model_candidates(primary: str) -> list[str]:
         model = model.strip()
         if model and model not in clean:
             clean.append(model)
-    return clean or ["openai/gpt-oss-120b"]
+    return clean or [settings.OPENROUTER_TEXT_MODEL]
 
 
 def _headers() -> dict[str, str]:

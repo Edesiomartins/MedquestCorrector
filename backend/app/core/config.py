@@ -31,9 +31,9 @@ class Settings(BaseSettings):
     OPENROUTER_VISION_FALLBACKS: str = (
         "qwen/qwen2.5-vl-32b-instruct,qwen/qwen-2.5-vl-7b-instruct,google/gemini-2.5-flash"
     )
-    OPENROUTER_TEXT_MODEL: str = "openai/gpt-oss-120b"
+    OPENROUTER_TEXT_MODEL: str = "deepseek/deepseek-v4-flash:free"
     OPENROUTER_TEXT_FALLBACKS: str = (
-        "openai/gpt-oss-20b,meta-llama/llama-3.1-8b-instruct,qwen/qwen3-235b-a22b-2507"
+        "qwen/qwen3-235b-a22b-2507,qwen/qwen2.5-72b-instruct,qwen/qwen2.5-32b-instruct"
     )
     OPENROUTER_HTTP_REFERER: str = ""
     OPENROUTER_APP_TITLE: str = "MedQuest Discursive Grading"
