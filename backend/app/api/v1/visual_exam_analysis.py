@@ -19,7 +19,6 @@ from app.models.exam import Exam, ExamQuestion
 from app.models.user import User
 from app.models.visual_exam import VisualExamAnswer, VisualExamRun, VisualExamRunStatus
 from app.services.export.spreadsheet import export_results_xlsx
-from app.services.visual_exam_pipeline import analyze_discursive_exam_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +124,8 @@ async def analyze_discursive_pdf(
         )
         db.add(run)
         db.commit()
+
+        from app.services.visual_exam_pipeline import analyze_discursive_exam_pdf
 
         result = await run_in_threadpool(
             analyze_discursive_exam_pdf,

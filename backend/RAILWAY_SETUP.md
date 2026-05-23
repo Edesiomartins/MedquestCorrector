@@ -22,7 +22,7 @@ Eles geram automaticamente variáveis (`DATABASE_URL`, `REDIS_URL`) que você re
 1. **+ New** → **GitHub Repo** → selecione `Medquest-Proof-Corrector`
 2. Em **Settings**:
    - **Root Directory:** `/backend`
-   - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1`
 3. Em **Variables** → **Raw Editor**, cole e preencha:
 
 ```
@@ -37,6 +37,9 @@ UPLOAD_DIR=/tmp/medquest_uploads
 MAX_UPLOAD_MB=40
 MAX_CSV_MB=5
 MAX_CSV_ROWS=2000
+CELERY_WORKER_CONCURRENCY=1
+CELERY_WORKER_PREFETCH_MULTIPLIER=1
+CELERY_WORKER_MAX_TASKS_PER_CHILD=20
 ```
 
 > Para gerar `JWT_SECRET_KEY`: `python -c "import secrets; print(secrets.token_hex(32))"`
@@ -48,10 +51,12 @@ MAX_CSV_ROWS=2000
 1. **+ New** → **GitHub Repo** → mesmo repositório
 2. Em **Settings**:
    - **Root Directory:** `/backend`
-   - **Start Command:** `celery -A app.core.celery_app worker --loglevel=info`
+   - **Start Command:** `celery -A app.core.celery_app worker --loglevel=info --concurrency=1 --prefetch-multiplier=1 --max-tasks-per-child=20`
 3. Em **Variables**: **copie exatamente as mesmas variáveis** do serviço da API.
 
 > API e Worker precisam compartilhar `DATABASE_URL`, `REDIS_URL` e `OPENROUTER_API_KEY`.
+
+> O worker processa PDFs/imagens e carrega bibliotecas pesadas como PyMuPDF, Pillow e OpenCV. No Railway, deixar a concorrência padrão do Celery pode multiplicar o uso de memória por processo. Para começar barato, use `concurrency=1` e aumente apenas se houver fila acumulada.
 
 ---
 

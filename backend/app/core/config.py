@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     MISTRAL_OCR_MODEL: str = "mistral-ocr-latest"
     GOOGLE_VISION_API_KEY: str = ""
 
+    CELERY_WORKER_CONCURRENCY: int = 1
+    CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1
+    CELERY_WORKER_MAX_TASKS_PER_CHILD: int = 20
+
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     UPLOAD_DIR: Path = Path("uploads")
