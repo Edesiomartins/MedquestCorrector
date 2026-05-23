@@ -107,6 +107,27 @@ def test_practical_grading_matches_expected_muscle_with_laterality_abbreviation(
     assert out["needs_human_review"] is False
 
 
+def test_practical_grading_accepts_accents_and_compact_muscle_laterality_abbreviations():
+    cases = [
+        "M. Soleo E",
+        "M.Soleo E.",
+        "musc. sóleo esq.",
+        "Sóleo esquerdo (E)",
+    ]
+
+    for answer in cases:
+        out = grade_practical_answer(
+            {"number": 1, "reading_confidence": "alta"},
+            {"expected_answer": "Músculo Sóleo Esquerdo", "max_score": 1.0},
+            answer,
+            reading_confidence="alta",
+        )
+
+        assert out["score"] == 1.0
+        assert out["verdict"] == "correta"
+        assert out["needs_human_review"] is False
+
+
 def test_practical_grading_rejects_wrong_laterality():
     out = grade_practical_answer(
         {"number": 1, "reading_confidence": "alta"},

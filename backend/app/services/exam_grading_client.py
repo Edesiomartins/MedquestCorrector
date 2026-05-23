@@ -651,8 +651,9 @@ def _strip_accents(value: str) -> str:
 
 def _normalize_practical_answer(value: str) -> str:
     text = _strip_accents(value).lower()
+    text = _separate_compact_anatomy_abbreviations(text)
     text = _expand_anatomy_abbreviations(text)
-    text = re.sub(r"\b(m|musculo|músculo)\.?\b", " ", text)
+    text = re.sub(r"\b(m|musc|musculo|músculo)\.?\b", " ", text)
     text = re.sub(r"\besq(?:\.|uerda|uerdo)?\b", " esquerdo ", text)
     text = re.sub(r"\bdir(?:\.|eita|eito)?\b", " direito ", text)
     text = re.sub(r"[^a-z0-9\s]", " ", text)
@@ -737,8 +738,9 @@ def _canonicalize_practical_aliases(text: str) -> str:
 
 
 def _expand_anatomy_abbreviations(text: str) -> str:
-    out = f" {_strip_accents(text).lower()} "
+    out = f" {_separate_compact_anatomy_abbreviations(_strip_accents(text).lower())} "
     # Anatomia: singular/plural
+    out = re.sub(r"\bmusc\.?(?=\s|$)", " musculo ", out)
     out = re.sub(r"\bmm\.?(?=\s|$)", " musculos ", out)
     out = re.sub(r"\bm\.?(?=\s|$)", " musculo ", out)
     # Vasos
@@ -756,3 +758,12 @@ def _expand_anatomy_abbreviations(text: str) -> str:
     out = re.sub(r"\boss\.?(?=\s|$)", " ossos ", out)
     out = re.sub(r"\bos\.?(?=\s|$)", " osso ", out)
     return re.sub(r"\s+", " ", out).strip()
+
+
+def _separate_compact_anatomy_abbreviations(text: str) -> str:
+    """Aceita escrita compacta comum, como M.Soleo, A.Braquial ou N.Femoral."""
+    return re.sub(
+        r"\b(mm|musc|m|aa|a|vv|v|nn|n|ll|l|tt|t|oss|os)\.(?=[a-z])",
+        r"\1. ",
+        str(text or ""),
+    )
