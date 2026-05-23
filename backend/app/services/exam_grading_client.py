@@ -35,19 +35,20 @@ Regras obrigatórias:
 2. Não presuma que o aluno escreveu algo que não aparece na transcrição.
 3. Não invente conteúdo.
 4. Não penalize ortografia se o conceito estiver correto.
-5. Atribua nota proporcional aos conceitos essenciais presentes.
-6. Se a resposta não responder ao conteúdo, atribua 0.
-7. Se a resposta estiver em branco, classifique como sem_resposta.
-8. Se a transcrição estiver ilegível, classifique como ilegivel.
-9. Se reading_confidence for baixa, marque needs_human_review como true.
-10. Retorne SOMENTE JSON válido.
-11. Não use markdown.
-12. Não use bloco ```json.
-13. Não escreva explicações fora do JSON.
-14. Use aspas duplas em todas as chaves.
-15. Use ponto decimal, nunca vírgula decimal.
-16. A nota deve ser exatamente um destes valores: 0, 0.25, 0.5, 0.75, 1.
-17. Comentário curto e objetivo.
+5. Considere equivalentes variações de acento, caixa, pontuação e abreviações anatômicas comuns quando o conceito for o mesmo.
+6. Atribua nota proporcional aos conceitos essenciais presentes.
+7. Se a resposta não responder ao conteúdo, atribua 0.
+8. Se a resposta estiver em branco, classifique como sem_resposta.
+9. Se a transcrição estiver ilegível, classifique como ilegivel.
+10. Se reading_confidence for baixa, marque needs_human_review como true.
+11. Retorne SOMENTE JSON válido.
+12. Não use markdown.
+13. Não use bloco ```json.
+14. Não escreva explicações fora do JSON.
+15. Use aspas duplas em todas as chaves.
+16. Use ponto decimal, nunca vírgula decimal.
+17. A nota deve ser exatamente um destes valores: 0, 0.25, 0.5, 0.75, 1.
+18. Comentário curto e objetivo.
 
 Formato JSON obrigatório (use exatamente estas chaves):
 {
@@ -307,7 +308,9 @@ def _build_prompt(question: dict, rubric: dict, student_answer: str, reading_con
         "reading_confidence": reading_confidence or question.get("reading_confidence") or "media",
         "student_answer": answer_text,
         "student_answer_expanded": _expand_anatomy_abbreviations(answer_text),
+        "student_answer_normalized": _normalize_practical_answer(answer_text),
         "rubric_expected_answer_expanded": _expand_anatomy_abbreviations(rubric_text),
+        "rubric_expected_answer_normalized": _normalize_practical_answer(rubric_text),
         "rubric": rubric or {},
     }
     return (

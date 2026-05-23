@@ -128,6 +128,29 @@ def test_practical_grading_accepts_accents_and_compact_muscle_laterality_abbrevi
         assert out["needs_human_review"] is False
 
 
+def test_practical_grading_accepts_common_anatomy_abbreviations_generically():
+    cases = [
+        ("Artéria braquial direita", "A.Braquial D."),
+        ("Veia safena magna esquerda", "V.Safena magna E."),
+        ("Nervo femoral direito", "N.Femoral D."),
+        ("Ligamento colateral medial direito", "L. colateral medial D."),
+        ("Tendão calcâneo esquerdo", "T. calcaneo E."),
+        ("Osso navicular esquerdo", "Os. navicular E."),
+    ]
+
+    for expected, answer in cases:
+        out = grade_practical_answer(
+            {"number": 1, "reading_confidence": "alta"},
+            {"expected_answer": expected, "max_score": 1.0},
+            answer,
+            reading_confidence="alta",
+        )
+
+        assert out["score"] == 1.0
+        assert out["verdict"] == "correta"
+        assert out["needs_human_review"] is False
+
+
 def test_practical_grading_rejects_wrong_laterality():
     out = grade_practical_answer(
         {"number": 1, "reading_confidence": "alta"},
@@ -220,3 +243,5 @@ def test_discursive_prompt_includes_expanded_anatomy_abbreviations():
     assert "musculos flexores" in prompt.lower()
     assert "arteria braquial" in prompt.lower()
     assert "rubric_expected_answer_expanded" in prompt
+    assert "student_answer_normalized" in prompt
+    assert "rubric_expected_answer_normalized" in prompt
