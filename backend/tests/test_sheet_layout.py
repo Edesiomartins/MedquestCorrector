@@ -6,13 +6,16 @@ from reportlab.lib.units import mm
 from app.services.generator.answer_sheet import (
     QuestionSlot,
     StudentInfo,
-    auto_fit_practical_sheet_options,
     generate_answer_sheets,
+    practical_answer_sheet_options,
 )
 from app.services.generator.sheet_layout import (
     FIDUCIAL_OUTER_GAP,
     MARGIN,
     PAGE_TOP_CONTENT_INSET,
+    PRACTICAL_AUTOFIT_MAX_BOX_H,
+    PRACTICAL_AUTOFIT_MIN_BOX_H,
+    autofit_practical_options,
     pdf_answer_box_to_pil_pixels,
     QR_SIZE,
     compute_answer_sheet_pages,
@@ -152,8 +155,9 @@ def test_generated_sheet_does_not_truncate_long_question_text():
     assert final_phrase in normalized
 
 
-def test_practical_sheet_fits_twelve_short_questions_with_compact_logo_space():
-    options = auto_fit_practical_sheet_options(_questions(12), has_logo=True)
+def _practical_pages(count: int):
+    questions = _questions(count)
+    options = autofit_practical_options(questions, practical_answer_sheet_options())
     logo_bottom_y_after = (
         A4[1]
         - MARGIN
@@ -161,16 +165,41 @@ def test_practical_sheet_fits_twelve_short_questions_with_compact_logo_space():
         - options["logo_max_height"]
         - options["logo_bottom_gap"]
     )
-
     pages, _ = compute_answer_sheet_pages(
         uuid4(),
-        _questions(12),
+        questions,
         uuid4(),
         logo_bottom_y_after=logo_bottom_y_after,
         **options,
     )
+    return pages, options
 
-    assert sum(len(p.boxes) for p in pages) == 12
-    assert len(pages) <= 2
-    assert float(options["logo_max_height"]) >= 18 * mm
-    assert options["question_number_after_text"] is True
+
+def test_practical_autofit_keeps_all_questions_on_single_page():
+    # Provas práticas típicas (até ~12 questões curtas) devem caber numa página só.
+    for count in (5, 8, 10, 11, 12):
+        pages, _ = _practical_pages(count)
+        assert len(pages) == 1, (count, [len(p.boxes) for p in pages])
+        assert len(pages[0].boxes) == count
+
+
+def test_practical_autofit_fewer_questions_get_bigger_boxes():
+    # Com menos questões, a caixa cresce para preencher o espaço da página.
+    pages_10, _ = _practical_pages(10)
+    pages_12, _ = _practical_pages(12)
+    box_h_10 = pages_10[0].boxes[0].height_pt
+    box_h_12 = pages_12[0].boxes[0].height_pt
+    assert box_h_10 > box_h_12
+
+
+def test_practical_autofit_box_height_within_bounds():
+    epsilon = 0.01
+    for count in (5, 10, 12):
+        pages, _ = _practical_pages(count)
+        for page in pages:
+            for box in page.boxes:
+                assert (
+                    PRACTICAL_AUTOFIT_MIN_BOX_H - epsilon
+                    <= box.height_pt
+                    <= PRACTICAL_AUTOFIT_MAX_BOX_H + epsilon
+                ), (count, box.height_pt)
