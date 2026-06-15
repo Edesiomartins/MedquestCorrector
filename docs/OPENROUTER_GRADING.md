@@ -1,4 +1,4 @@
-# Medquest Proof Corrector - Estratégia de Correção via OpenRouter
+# medquestcorrector - Estratégia de Correção via OpenRouter
 
 Este documento define os padrões para uso da API OpenRouter para orquestração dos modelos de LLM.
 

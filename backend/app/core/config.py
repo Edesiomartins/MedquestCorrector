@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "Medquest Proof Corrector"
+    PROJECT_NAME: str = "medquestcorrector"
     API_V1_STR: str = "/api/v1"
 
     DATABASE_URL: str = "postgresql://user:password@localhost/medquest_corrector"
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
         "qwen/qwen3-235b-a22b-2507,qwen/qwen2.5-72b-instruct,qwen/qwen2.5-32b-instruct"
     )
     OPENROUTER_HTTP_REFERER: str = ""
-    OPENROUTER_APP_TITLE: str = "MedQuest Discursive Grading"
+    OPENROUTER_APP_TITLE: str = "medquestcorrector"
     OPENROUTER_TIMEOUT_SECONDS: float = 90.0
     OCR_PROVIDER: str = "mistral,google_vision"
     MISTRAL_API_KEY: str = ""
@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     CELERY_WORKER_MAX_TASKS_PER_CHILD: int = 20
 
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def normalize_cors_origins(cls, value: object) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip().strip('"').strip("'")
+        return text
 
     UPLOAD_DIR: Path = Path("uploads")
     MAX_UPLOAD_MB: int = 40
@@ -62,7 +70,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
     def cors_origin_list(self) -> List[str]:
-        parts = [o.strip().rstrip("/") for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        raw = self.CORS_ORIGINS.replace(";", ",")
+        parts = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
         return parts if parts else ["http://localhost:3000"]
 
 

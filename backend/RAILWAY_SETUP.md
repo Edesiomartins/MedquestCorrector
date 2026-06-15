@@ -19,7 +19,7 @@ Eles geram automaticamente variáveis (`DATABASE_URL`, `REDIS_URL`) que você re
 
 ## Passo 2 — Serviço da API (FastAPI)
 
-1. **+ New** → **GitHub Repo** → selecione `Medquest-Proof-Corrector`
+1. **+ New** → **GitHub Repo** → selecione `medquestcorrector`
 2. Em **Settings**:
    - **Root Directory:** `/backend`
    - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1`
@@ -28,7 +28,7 @@ Eles geram automaticamente variáveis (`DATABASE_URL`, `REDIS_URL`) que você re
 ```
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 REDIS_URL=${{Redis.REDIS_URL}}
-CORS_ORIGINS=https://SEU-FRONTEND.up.railway.app
+CORS_ORIGINS=https://medquestcorrector.up.railway.app
 OPENROUTER_API_KEY=sk-or-v1-SUA-CHAVE-AQUI
 JWT_SECRET_KEY=GERE-UMA-CHAVE-FORTE
 JWT_ALGORITHM=HS256
@@ -88,6 +88,21 @@ NEXT_PUBLIC_API_URL=https://SEU-BACKEND-API.up.railway.app/api/v1
 - [ ] `NEXT_PUBLIC_API_URL` no frontend = URL do backend + `/api/v1`
 - [ ] `OPENROUTER_API_KEY` preenchida (necessária para correção funcionar)
 - [ ] `JWT_SECRET_KEY` com valor forte (não o default `dev-only-change-me`)
+
+### Erro de CORS no login
+
+Se o navegador mostrar *"blocked by CORS policy"* ao chamar a API:
+
+1. No serviço **API** (não no frontend), defina exatamente:
+   ```
+   CORS_ORIGINS=https://medquestcorrector.up.railway.app
+   ```
+   (use a URL pública do **frontend**, sem barra no final)
+2. Faça **Redeploy** da API após salvar a variável.
+3. Confirme que a API está no ar: abra `https://medquestcorrector-api.up.railway.app/health` — deve retornar `{"status":"ok",...}`.
+4. Nos logs da API após o deploy, procure `CORS allow_origins:` — a URL do frontend deve aparecer na lista.
+
+> `CORS_ORIGINS` só precisa existir no serviço **FastAPI**. O worker Celery não atende o browser.
 
 ---
 

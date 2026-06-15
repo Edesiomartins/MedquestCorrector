@@ -1,4 +1,4 @@
-# Medquest Proof Corrector - Roadmap Estratégico
+# medquestcorrector - Roadmap Estratégico
 
 Este documento foca na execução pragmática do produto visando entregar valor em produção rapidamente (Mentalidade Low Cost e MVP), escalando as funcionalidades à medida que o projeto ganha tração.
 

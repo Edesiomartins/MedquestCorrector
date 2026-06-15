@@ -21,8 +21,8 @@ export default function Sidebar() {
     <aside className="w-64 h-screen glass-panel flex flex-col fixed left-0 top-0 border-r border-surface-border">
       <div className="px-4 py-5 border-b border-surface-border/60 flex items-center justify-center">
         <img
-          src="/medquest-logo.png"
-          alt="MedQuest Correção"
+          src="/medquestcorrector-logo.png"
+          alt="medquestcorrector"
           className="w-48 h-auto object-contain"
         />
       </div>
@@ -38,7 +38,7 @@ export default function Sidebar() {
         </Link>
         <Link href="/exams" className={linkClass(pathname, "/exams")}>
           <FileText className="w-5 h-5" />
-          <span>Provas</span>
+          <span>Provas Discursivas</span>
         </Link>
         <Link href="/provas-praticas" className={linkClass(pathname, "/provas-praticas")}>
           <ClipboardList className="w-5 h-5" />

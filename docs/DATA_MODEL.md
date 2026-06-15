@@ -1,4 +1,4 @@
-# Medquest Proof Corrector - Modelo de Dados Inicial
+# medquestcorrector - Modelo de Dados Inicial
 
 Este documento define as entidades principais que sustentarão o MVP e o pipeline assíncrono. O uso de PostgreSQL é o recomendado.
 

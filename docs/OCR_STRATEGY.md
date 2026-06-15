@@ -1,4 +1,4 @@
-# Medquest Proof Corrector - Estratégia de OCR Manuscrito
+# medquestcorrector - Estratégia de OCR Manuscrito
 
 A leitura de texto manuscrito/cursivo é um dos desafios mais complexos em visão computacional e frequentemente o ponto de estrangulamento para o sucesso da correção automática.
 

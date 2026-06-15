@@ -6,7 +6,7 @@ import Providers from "@/components/layout/Providers";
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  title: "Medquest Proof Corrector",
+  title: "medquestcorrector",
   description: "AI-assisted exam grading platform",
 };
 

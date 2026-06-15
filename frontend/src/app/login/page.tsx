@@ -50,7 +50,7 @@ export default function LoginPage() {
             M
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight">Medquest</h1>
+            <h1 className="text-xl font-bold tracking-tight">medquestcorrector</h1>
             <p className="text-sm text-slate-500">Entrar na conta</p>
           </div>
         </div>

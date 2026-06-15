@@ -462,7 +462,7 @@ def _draw_sheet(
 
     c.setFont("Helvetica", 7)
     c.setFillColor(colors.grey)
-    c.drawCentredString(w / 2, margin - 6 * mm, "Medquest Proof Corrector — Folha gerada automaticamente")
+    c.drawCentredString(w / 2, margin - 6 * mm, "medquestcorrector — Folha gerada automaticamente")
     c.setFillColor(colors.black)
 def _load_logo(logo_bytes: bytes | None) -> LogoSpec | None:
     if not logo_bytes:

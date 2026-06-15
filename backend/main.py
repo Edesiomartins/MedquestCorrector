@@ -2,11 +2,14 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+import logging
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
-    title="Medquest Proof Corrector API",
+    title="medquestcorrector API",
     description="API para correção de provas discursivas assistida por IA",
     version="2.0.0",
     redirect_slashes=False,
@@ -22,6 +25,11 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
+
+
+@app.on_event("startup")
+def _log_cors_origins() -> None:
+    logger.info("CORS allow_origins: %s", _origins)
 
 
 @app.exception_handler(Exception)
@@ -41,7 +49,7 @@ async def _global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "message": "Medquest Corrector API is running"}
+    return {"status": "ok", "message": "medquestcorrector API is running"}
 
 
 upload_dir = settings.UPLOAD_DIR.resolve()

@@ -1,4 +1,4 @@
-# Medquest Proof Corrector - Especificação da API
+# medquestcorrector - Especificação da API
 
 Esta API foi desenhada de forma RESTful focando primariamente em servir a aplicação Next.js para controle do pipeline. As respostas de rotas REST pesadas usarão paginação.
 

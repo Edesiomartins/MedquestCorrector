@@ -1,8 +1,8 @@
-# Medquest Proof Corrector - Architecture
+# medquestcorrector - Architecture
 
 ## Visão Geral
 
-O Medquest Proof Corrector é projetado como uma **plataforma orientada a eventos/workers**. O processamento de PDFs, extração de imagens, OCR e chamadas para LLM são operações intensivas em I/O e sujeitas a falhas/rate-limits. Para garantir a confiabilidade, a arquitetura desvincula a ingestão dos dados de sua análise através de filas.
+O medquestcorrector é projetado como uma **plataforma orientada a eventos/workers**. O processamento de PDFs, extração de imagens, OCR e chamadas para LLM são operações intensivas em I/O e sujeitas a falhas/rate-limits. Para garantir a confiabilidade, a arquitetura desvincula a ingestão dos dados de sua análise através de filas.
 
 ## Fluxo Principal (Fim-a-Fim)
 
