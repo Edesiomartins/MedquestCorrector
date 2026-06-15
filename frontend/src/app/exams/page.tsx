@@ -34,6 +34,8 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [pendingLogoExam, setPendingLogoExam] = useState<{ id: string; name: string } | null>(null);
   const logoInputRef = useRef<HTMLInputElement | null>(null);
@@ -53,6 +55,7 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
         params: { practical: isPracticalMode },
       });
       setExams(data);
+      setSelectedIds(new Set());
     } catch {
       setError('Não foi possível carregar as provas.');
     } finally {
@@ -123,6 +126,26 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
     await handleDownloadSheets(exam.id, exam.name, selectedLogo);
   };
 
+  const toggleSelect = (examId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(examId)) next.delete(examId);
+      else next.add(examId);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === exams.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(exams.map((e) => e.id)));
+    }
+  };
+
+  const allSelected = exams.length > 0 && selectedIds.size === exams.length;
+  const someSelected = selectedIds.size > 0;
+
   const handleDelete = async (examId: string, examName: string) => {
     if (!confirm(`Excluir a prova "${examName}" e todas as suas questões?`)) return;
     setDeletingId(examId);
@@ -130,11 +153,51 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
     try {
       await api.delete(`/exams/${examId}`);
       setExams((prev) => prev.filter((e) => e.id !== examId));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(examId);
+        return next;
+      });
     } catch {
       setError('Erro ao excluir a prova.');
     } finally {
       setDeletingId(null);
     }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    const names = exams.filter((e) => selectedIds.has(e.id)).map((e) => e.name);
+    const preview = names.slice(0, 5).join('\n');
+    const msg =
+      ids.length === 1
+        ? `Excluir a prova "${names[0]}" e todas as suas questões?`
+        : `Excluir ${ids.length} provas selecionadas e todas as suas questões?\n\n${preview}${names.length > 5 ? '\n...' : ''}`;
+    if (!confirm(msg)) return;
+
+    setBulkDeleting(true);
+    setError(null);
+    const failedIds: string[] = [];
+    for (const id of ids) {
+      try {
+        await api.delete(`/exams/${id}`);
+      } catch {
+        failedIds.push(id);
+      }
+    }
+
+    const deletedIds = ids.filter((id) => !failedIds.includes(id));
+    setExams((prev) => prev.filter((e) => !deletedIds.includes(e.id)));
+    setSelectedIds(new Set(failedIds));
+
+    if (failedIds.length > 0) {
+      setError(
+        failedIds.length === ids.length
+          ? 'Erro ao excluir as provas selecionadas.'
+          : `${failedIds.length} prova(s) não puderam ser excluídas.`,
+      );
+    }
+    setBulkDeleting(false);
   };
 
   const handleDownloadDocxTemplate = async () => {
@@ -280,11 +343,53 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
         </div>
       </div>
 
+      {isPracticalMode && someSelected && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50/80 px-4 py-3 dark:border-red-900/40 dark:bg-red-900/20">
+          <p className="text-sm font-medium text-red-800 dark:text-red-300">
+            {selectedIds.size} prova{selectedIds.size !== 1 ? 's' : ''} selecionada{selectedIds.size !== 1 ? 's' : ''}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              disabled={bulkDeleting}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+            >
+              Limpar seleção
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleBulkDelete()}
+              disabled={bulkDeleting}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-40"
+            >
+              {bulkDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              Excluir selecionadas
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="glass-panel rounded-xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50/50 dark:bg-slate-800/30 text-slate-500 text-xs uppercase tracking-wider font-semibold">
+                {isPracticalMode && (
+                  <th className="w-12 px-4 py-4">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someSelected && !allSelected;
+                      }}
+                      onChange={toggleSelectAll}
+                      disabled={exams.length === 0 || bulkDeleting}
+                      className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      aria-label="Selecionar todas as provas"
+                    />
+                  </th>
+                )}
                 <th className="px-6 py-4">Prova</th>
                 <th className="px-6 py-4">Questões</th>
                 <th className="px-6 py-4">Turma</th>
@@ -294,13 +399,30 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
             <tbody className="divide-y divide-surface-border">
               {exams.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={4} className="px-6 py-8 text-center text-slate-500 text-sm">
+                  <td colSpan={isPracticalMode ? 5 : 4} className="px-6 py-8 text-center text-slate-500 text-sm">
                     Nenhuma prova. Clique em &quot;Criar Nova Prova&quot;.
                   </td>
                 </tr>
               ) : (
                 exams.map((ex) => (
-                  <tr key={ex.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
+                  <tr
+                    key={ex.id}
+                    className={`transition-colors hover:bg-slate-50/50 dark:hover:bg-slate-800/20 ${
+                      isPracticalMode && selectedIds.has(ex.id) ? 'bg-emerald-50/40 dark:bg-emerald-900/10' : ''
+                    }`}
+                  >
+                    {isPracticalMode && (
+                      <td className="px-4 py-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(ex.id)}
+                          onChange={() => toggleSelect(ex.id)}
+                          disabled={bulkDeleting}
+                          className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                          aria-label={`Selecionar prova ${ex.name}`}
+                        />
+                      </td>
+                    )}
                     <td className="px-6 py-4">
                       <div className="flex items-center space-x-3">
                         <div className="p-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg">
@@ -348,7 +470,7 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
                         <button
                           type="button"
                           onClick={() => handleDelete(ex.id, ex.name)}
-                          disabled={deletingId === ex.id}
+                          disabled={deletingId === ex.id || bulkDeleting}
                           className="p-2 bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 transition-colors rounded-lg inline-flex items-center space-x-1.5 text-xs font-medium border border-red-200 dark:border-red-800 disabled:opacity-40"
                           title="Excluir prova"
                         >
