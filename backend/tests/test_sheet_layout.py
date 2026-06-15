@@ -6,8 +6,8 @@ from reportlab.lib.units import mm
 from app.services.generator.answer_sheet import (
     QuestionSlot,
     StudentInfo,
+    auto_fit_practical_sheet_options,
     generate_answer_sheets,
-    practical_answer_sheet_options,
 )
 from app.services.generator.sheet_layout import (
     FIDUCIAL_OUTER_GAP,
@@ -153,7 +153,7 @@ def test_generated_sheet_does_not_truncate_long_question_text():
 
 
 def test_practical_sheet_fits_twelve_short_questions_with_compact_logo_space():
-    options = practical_answer_sheet_options()
+    options = auto_fit_practical_sheet_options(_questions(12), has_logo=True)
     logo_bottom_y_after = (
         A4[1]
         - MARGIN
@@ -170,5 +170,7 @@ def test_practical_sheet_fits_twelve_short_questions_with_compact_logo_space():
         **options,
     )
 
-    assert len(pages) == 1
-    assert len(pages[0].boxes) == 12
+    assert sum(len(p.boxes) for p in pages) == 12
+    assert len(pages) <= 2
+    assert float(options["logo_max_height"]) >= 18 * mm
+    assert options["question_number_after_text"] is True

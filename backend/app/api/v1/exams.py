@@ -27,8 +27,8 @@ from app.schemas.exam import (
 from app.services.generator.answer_sheet import (
     QuestionSlot,
     StudentInfo,
+    auto_fit_practical_sheet_options,
     generate_answer_sheets,
-    practical_answer_sheet_options,
 )
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
@@ -352,7 +352,7 @@ def download_practical_answer_sheets_with_logo(
         exam_id=exam_id,
         db=db,
         logo_bytes=logo_bytes,
-        sheet_options=practical_answer_sheet_options(),
+        auto_fit_practical=True,
     )
 
 
@@ -361,6 +361,7 @@ def _build_answer_sheets_response(
     db: Session,
     logo_bytes: bytes | None = None,
     sheet_options: dict | None = None,
+    auto_fit_practical: bool = False,
 ):
     """Gera e baixa folhas-resposta PDF para todos os alunos da turma vinculada."""
     exam = db.query(Exam).filter(Exam.id == exam_id).first()
@@ -390,14 +391,23 @@ def _build_answer_sheets_response(
     )
     if not questions:
         raise HTTPException(status_code=400, detail="Prova sem questões cadastradas.")
+
+    question_slots = [
+        QuestionSlot(number=q.question_number, text=q.question_text, max_score=q.max_score)
+        for q in questions
+    ]
+    effective_sheet_options = sheet_options
+    if auto_fit_practical:
+        effective_sheet_options = auto_fit_practical_sheet_options(
+            question_slots,
+            has_logo=logo_bytes is not None,
+        )
+
     try:
         pdf_bytes, manifest = generate_answer_sheets(
             exam_id=exam_id,
             exam_name=exam.name,
-            questions=[
-                QuestionSlot(number=q.question_number, text=q.question_text, max_score=q.max_score)
-                for q in questions
-            ],
+            questions=question_slots,
             students=[
                 (
                     s.id,
@@ -411,7 +421,7 @@ def _build_answer_sheets_response(
                 for s in students
             ],
             logo_bytes=logo_bytes,
-            **(sheet_options or {}),
+            **(effective_sheet_options or {}),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

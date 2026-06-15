@@ -39,6 +39,7 @@ QUESTION_TEXT_MAX_CHARS = 95
 QUESTION_TEXT_FONT_NAME = "Helvetica"
 QUESTION_TEXT_FONT_SIZE = 8
 QUESTION_TITLE_GAP = 5 * mm
+QUESTION_NUMBER_LINE_HEIGHT = 4 * mm
 QUESTION_TEXT_LINE_GAP = 4 * mm
 QUESTION_TEXT_BOTTOM_GAP = 2 * mm
 # Mantido para compatibilidade com imports antigos; o cálculo atual usa o texto real.
@@ -148,10 +149,21 @@ def question_block_height(
     title_gap: float | None = None,
     text_bottom_gap: float | None = None,
     question_prefix: str = "",
+    question_number_after_text: bool = False,
 ) -> float:
     """Altura real ocupada por uma questão antes de avançar para a próxima."""
     tg = title_gap if title_gap is not None else QUESTION_TITLE_GAP
     tbg = text_bottom_gap if text_bottom_gap is not None else QUESTION_TEXT_BOTTOM_GAP
+    if question_number_after_text:
+        text_lines = wrap_question_text(text, question_text_width)
+        return (
+            (len(text_lines) * QUESTION_TEXT_LINE_GAP)
+            + tbg
+            + QUESTION_NUMBER_LINE_HEIGHT
+            + tg
+            + answer_area_h
+            + spacing
+        )
     text_lines = wrap_question_text(f"{question_prefix}{text}", question_text_width)
     return (
         tg
@@ -185,6 +197,7 @@ def compute_answer_sheet_pages(
     header_title_font_size: float | None = None,
     header_subtitle_font_size: float | None = None,
     inline_question_prompt: bool = False,
+    question_number_after_text: bool = False,
 ) -> tuple[list[ManifestPage], int]:
     """
     Simula a paginação de `_draw_sheet` e retorna páginas com boxes de resposta.
@@ -275,6 +288,7 @@ def compute_answer_sheet_pages(
             title_gap=title_gap,
             text_bottom_gap=text_bottom_gap,
             question_prefix=f"Questão {q.number} - " if inline_question_prompt else "",
+            question_number_after_text=question_number_after_text,
         )
         if y - needed < margin:
             pages.append(current)
@@ -284,16 +298,25 @@ def compute_answer_sheet_pages(
             y -= cont_gap
             current.fiducials = fiducials_for_page(w, h, y + 6 * mm)
 
-        if inline_question_prompt:
+        if question_number_after_text:
+            text_lines = wrap_question_text(q.text, usable_w)
+            for _line in text_lines:
+                y -= QUESTION_TEXT_LINE_GAP
+            y -= text_bottom_gap
+            y -= QUESTION_NUMBER_LINE_HEIGHT
+            y -= title_gap
+        elif inline_question_prompt:
             text_lines = wrap_question_text(f"Questão {q.number} - {q.text}", usable_w)
+            for _line in text_lines:
+                y -= QUESTION_TEXT_LINE_GAP
+            y -= text_bottom_gap
         else:
             # Baseline do "Questão N"; em seguida o PDF faz `y -= title_gap`.
             y -= title_gap
             text_lines = wrap_question_text(q.text, usable_w)
-        for _line in text_lines:
-            y -= QUESTION_TEXT_LINE_GAP
-
-        y -= text_bottom_gap
+            for _line in text_lines:
+                y -= QUESTION_TEXT_LINE_GAP
+            y -= text_bottom_gap
 
         box_x = margin
         box_y_bottom = y - answer_area_h

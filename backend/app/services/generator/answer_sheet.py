@@ -2,7 +2,7 @@
 
 import io
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import qrcode
 from reportlab.lib import colors
@@ -25,6 +25,7 @@ from app.services.generator.sheet_layout import (
     QUESTION_TEXT_FONT_SIZE,
     QUESTION_TEXT_BOTTOM_GAP,
     QUESTION_TEXT_LINE_GAP,
+    QUESTION_NUMBER_LINE_HEIGHT,
     QUESTION_TITLE_GAP,
     QR_SIZE,
     compute_answer_sheet_pages,
@@ -83,6 +84,7 @@ def generate_answer_sheets(
     header_title_font_size: float | None = None,
     header_subtitle_font_size: float | None = None,
     inline_question_prompt: bool = False,
+    question_number_after_text: bool = False,
 ) -> tuple[bytes, dict]:
     """
     Gera PDF com folhas-resposta e o manifesto de layout (coordenadas dos boxes).
@@ -142,6 +144,7 @@ def generate_answer_sheets(
             header_title_font_size=header_title_font_size,
             header_subtitle_font_size=header_subtitle_font_size,
             inline_question_prompt=inline_question_prompt,
+            question_number_after_text=question_number_after_text,
         )
         all_manifest_pages.extend(pages_sim)
 
@@ -173,6 +176,7 @@ def generate_answer_sheets(
             header_title_font_size=header_title_font_size,
             header_subtitle_font_size=header_subtitle_font_size,
             inline_question_prompt=inline_question_prompt,
+            question_number_after_text=question_number_after_text,
         )
         c.showPage()
 
@@ -281,6 +285,7 @@ def _draw_sheet(
     header_title_font_size: float | None,
     header_subtitle_font_size: float | None,
     inline_question_prompt: bool,
+    question_number_after_text: bool,
 ):
     margin = 2 * cm
     page_in_student = 0
@@ -409,6 +414,7 @@ def _draw_sheet(
             title_gap=question_title_gap,
             text_bottom_gap=question_text_bottom_gap,
             question_prefix=f"Questão {q.number} - " if inline_question_prompt else "",
+            question_number_after_text=question_number_after_text,
         )
         if y - needed < margin:
             c.showPage()
@@ -425,8 +431,19 @@ def _draw_sheet(
             y -= CONTINUATION_GAP_BELOW_HEADER
             _draw_fiducials(c, w, h, y + 6 * mm)
 
-        if inline_question_prompt:
+        if question_number_after_text:
+            text_lines = wrap_question_text(q.text, usable_w)
+            y = _draw_question_text(c, text_lines, margin, y, usable_w)
+            y -= question_text_bottom_gap
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(margin, y, f"Questão {q.number}")
+            c.setFont("Helvetica", 8)
+            c.drawRightString(w - margin, y, f"(vale {q.max_score} pts)")
+            y -= QUESTION_NUMBER_LINE_HEIGHT + question_title_gap
+        elif inline_question_prompt:
             text_lines = wrap_question_text(f"Questão {q.number} - {q.text}", usable_w)
+            y = _draw_question_text(c, text_lines, margin, y, usable_w)
+            y -= question_text_bottom_gap
         else:
             c.setFont("Helvetica-Bold", 10)
             c.drawString(margin, y, f"Questão {q.number}")
@@ -437,9 +454,9 @@ def _draw_sheet(
             y -= question_title_gap
 
             text_lines = wrap_question_text(q.text, usable_w)
-        y = _draw_question_text(c, text_lines, margin, y, usable_w)
+            y = _draw_question_text(c, text_lines, margin, y, usable_w)
 
-        y -= question_text_bottom_gap
+            y -= question_text_bottom_gap
 
         c.setStrokeColor(colors.Color(0.8, 0.8, 0.8))
         c.setFillColor(colors.Color(0.97, 0.97, 0.97))
@@ -480,18 +497,16 @@ def _load_logo(logo_bytes: bytes | None) -> LogoSpec | None:
 
 
 def practical_answer_sheet_options() -> dict[str, int | bool | float]:
-    """Parâmetros para folha prática: 1 linha de resposta e espaçamentos reduzidos."""
+    """Parâmetros base para folha prática: logo e caixa maiores, número junto da resposta."""
     return {
         "response_lines": 1,
         "compact_header": True,
-        # Mantém o enunciado visualmente associado à própria caixa de resposta,
-        # evitando parecer que ele pertence à questão anterior.
-        "question_spacing": 4 * mm,
-        "question_title_gap": 0,
-        "question_text_bottom_gap": 0.25 * mm,
-        "first_response_line_offset": 6 * mm,
-        "response_bottom_padding": 2 * mm,
-        "logo_max_height": 12 * mm,
+        "question_spacing": 3 * mm,
+        "question_title_gap": 1.5 * mm,
+        "question_text_bottom_gap": 1.5 * mm,
+        "first_response_line_offset": 8 * mm,
+        "response_bottom_padding": 3.5 * mm,
+        "logo_max_height": 18 * mm,
         "logo_bottom_gap": 5 * mm,
         "header_title_gap": 4 * mm,
         "header_subtitle_gap": 4 * mm,
@@ -500,5 +515,124 @@ def practical_answer_sheet_options() -> dict[str, int | bool | float]:
         "header_divider_below_gap": 3 * mm,
         "header_title_font_size": 12,
         "header_subtitle_font_size": 8,
-        "inline_question_prompt": True,
+        "inline_question_prompt": False,
+        "question_number_after_text": True,
     }
+
+
+def _practical_header_bottom_y(
+    *,
+    has_logo: bool,
+    options: dict[str, int | bool | float],
+    page_height: float,
+) -> float:
+    margin = 2 * cm
+    y = page_height - margin - PAGE_TOP_CONTENT_INSET
+    if has_logo:
+        y -= float(options["logo_max_height"]) + float(options["logo_bottom_gap"])
+    y -= float(options["header_title_gap"])
+    y -= float(options["header_subtitle_gap"])
+    y -= float(options["header_box_h"]) + float(options["header_box_bottom_gap"])
+    y -= float(options["header_divider_below_gap"])
+    return y
+
+
+def _practical_answer_area_h(options: dict[str, int | bool | float]) -> float:
+    lines = max(1, int(options["response_lines"]))
+    line_gap = 5 * mm
+    return (
+        float(options["first_response_line_offset"])
+        + (lines - 1) * line_gap
+        + float(options["response_bottom_padding"])
+    )
+
+
+def _practical_content_height(
+    questions: list[QuestionSlot],
+    options: dict[str, int | bool | float],
+    *,
+    spacing: float,
+) -> float:
+    _, page_w = A4
+    usable_w = page_w - (2 * 2 * cm)
+    answer_h = _practical_answer_area_h(options)
+    total = 0.0
+    for q in questions:
+        total += question_block_height(
+            q.text,
+            answer_h,
+            spacing,
+            usable_w,
+            title_gap=float(options["question_title_gap"]),
+            text_bottom_gap=float(options["question_text_bottom_gap"]),
+            question_number_after_text=bool(options.get("question_number_after_text", False)),
+        )
+    return total
+
+
+def auto_fit_practical_sheet_options(
+    questions: list[QuestionSlot],
+    *,
+    has_logo: bool = True,
+) -> dict[str, int | bool | float]:
+    """
+    Ajusta o espaçamento entre questões para aproveitar a página:
+    logo e caixa maiores, número da questão colado na caixa de resposta.
+    """
+    preferred = practical_answer_sheet_options()
+    _, page_h = A4
+    margin = 2 * cm
+
+    logo_bottom: float | None = None
+    if has_logo:
+        logo_bottom = (
+            page_h
+            - margin
+            - PAGE_TOP_CONTENT_INSET
+            - float(preferred["logo_max_height"])
+            - float(preferred["logo_bottom_gap"])
+        )
+
+    available = _practical_header_bottom_y(has_logo=has_logo, options=preferred, page_height=page_h) - margin
+    n = len(questions)
+    if n == 0:
+        return preferred
+
+    min_spacing = 1.5 * mm
+    max_spacing = 5 * mm
+    answer_h = _practical_answer_area_h(preferred)
+
+    fixed = _practical_content_height(questions, preferred, spacing=0.0)
+    if n > 1:
+        slack = available - fixed
+        even_spacing = min(max_spacing, max(min_spacing, slack / (n - 1)))
+    else:
+        even_spacing = float(preferred["question_spacing"])
+
+    best_opts = {**preferred, "question_spacing": even_spacing}
+    best_pages = 999
+
+    spacing_candidates = sorted(
+        {even_spacing, float(preferred["question_spacing"]), 2.5 * mm, 2 * mm, min_spacing},
+        reverse=True,
+    )
+
+    for spacing in spacing_candidates:
+        opts = {**preferred, "question_spacing": spacing}
+        pages, _ = compute_answer_sheet_pages(
+            uuid4(),
+            questions,
+            uuid4(),
+            logo_bottom_y_after=logo_bottom,
+            **opts,
+        )
+        page_count = len(pages)
+        if page_count < best_pages or (
+            page_count == best_pages and spacing > float(best_opts["question_spacing"])
+        ):
+            best_pages = page_count
+            best_opts = opts
+        if page_count == 1:
+            break
+
+    return best_opts
