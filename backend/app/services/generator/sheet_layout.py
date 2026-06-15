@@ -51,18 +51,19 @@ PRACTICAL_RESPONSE_LINES = 1
 # Objetivo: manter TODAS as questões numa única página, dimensionando a caixa de
 # resposta para preencher o espaço disponível (menos questões => caixas maiores).
 # Limites da altura da caixa de resposta (mantém legível e evita exageros).
-PRACTICAL_AUTOFIT_MIN_BOX_H = 6 * mm
+PRACTICAL_AUTOFIT_MIN_BOX_H = 5 * mm
 PRACTICAL_AUTOFIT_MAX_BOX_H = 18 * mm
-# Espaço acima do número da questão (separa da caixa da questão anterior).
-# Mantido maior que o gap até a própria caixa, para o número "colar" na caixa dele.
-PRACTICAL_AUTOFIT_SPACING = 4 * mm
+# Espaço ACIMA do enunciado (separa da caixa de resposta da questão anterior).
+# Deve ser grande o suficiente para o enunciado ficar visualmente mais próximo
+# da sua própria caixa de resposta do que da caixa da questão anterior.
+PRACTICAL_AUTOFIT_SPACING = 6 * mm
 # Padding inferior dentro da caixa de resposta.
 PRACTICAL_AUTOFIT_RESPONSE_PADDING = 2 * mm
 # Offset mínimo da linha de escrita a partir do topo da caixa.
 PRACTICAL_AUTOFIT_MIN_LINE_OFFSET = 4 * mm
 # Folga de segurança: evita encostar no limite exato da página (arredondamento de
 # ponto flutuante) e garante que todas as questões realmente caibam na página.
-PRACTICAL_AUTOFIT_SAFETY_SLACK = 5 * mm
+PRACTICAL_AUTOFIT_SAFETY_SLACK = 2 * mm
 
 
 @dataclass

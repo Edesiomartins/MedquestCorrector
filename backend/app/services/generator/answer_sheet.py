@@ -490,9 +490,11 @@ def practical_answer_sheet_options() -> dict[str, int | bool | float]:
     return {
         "response_lines": 1,
         "compact_header": True,
-        # Espaço acima do número da questão > espaço até a própria caixa, para o
-        # número ficar visualmente colado na caixa de resposta dele.
-        "question_spacing": 4 * mm,
+        # Espaço ACIMA do enunciado (entre a caixa de resposta anterior e o
+        # próximo enunciado). Deve ser grande o suficiente para separar
+        # visualmente o enunciado da caixa anterior e colá-lo na sua própria
+        # caixa de resposta.
+        "question_spacing": 6 * mm,
         "question_title_gap": 0,
         "question_text_bottom_gap": 0.5 * mm,
         # Caixa de resposta (fallback sem autoajuste).
