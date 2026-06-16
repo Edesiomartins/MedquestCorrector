@@ -5,6 +5,7 @@ import { Plus, Trash2, Save, Loader2, ArrowLeft } from 'lucide-react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { useExamNav } from '@/contexts/ExamNavContext';
 
 type ClassOption = {
   id: string;
@@ -40,6 +41,14 @@ export function EditExamPageContent({ mode = 'default' }: EditExamPageContentPro
   const examId = params.id as string;
   const isPracticalRoute = mode === 'practical';
   const listPath = isPracticalRoute ? '/provas-praticas' : '/exams';
+  const { setSection } = useExamNav();
+
+  useEffect(() => {
+    if (isPracticalRoute) {
+      setSection('practical');
+    }
+    return () => setSection(null);
+  }, [isPracticalRoute, setSection]);
 
   const [examName, setExamName] = useState("");
   const [classId, setClassId] = useState<string>("");
@@ -63,6 +72,11 @@ export function EditExamPageContent({ mode = 'default' }: EditExamPageContentPro
         setExamName(examRes.data.name);
         setClassId(examRes.data.class_id || "");
         setIsPractical(isPracticalRoute || Boolean(examRes.data.is_practical));
+        if (examRes.data.is_practical) {
+          setSection('practical');
+        } else {
+          setSection('discursive');
+        }
         if (!isPracticalRoute && examRes.data.is_practical) {
           router.replace(`/provas-praticas/${examId}/edit`);
           return;
@@ -76,7 +90,7 @@ export function EditExamPageContent({ mode = 'default' }: EditExamPageContentPro
       }
     };
     load();
-  }, [examId, isPracticalRoute, router]);
+  }, [examId, isPracticalRoute, router, setSection]);
 
   const addQuestion = () => {
     setQuestions([
