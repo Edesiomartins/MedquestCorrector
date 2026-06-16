@@ -28,10 +28,18 @@ type QuestionData = {
   _isNew?: boolean;
 };
 
-export default function EditExamPage() {
+type EditExamPageMode = 'default' | 'practical';
+
+type EditExamPageContentProps = {
+  mode?: EditExamPageMode;
+};
+
+export function EditExamPageContent({ mode = 'default' }: EditExamPageContentProps) {
   const router = useRouter();
   const params = useParams();
   const examId = params.id as string;
+  const isPracticalRoute = mode === 'practical';
+  const listPath = isPracticalRoute ? '/provas-praticas' : '/exams';
 
   const [examName, setExamName] = useState("");
   const [classId, setClassId] = useState<string>("");
@@ -42,7 +50,6 @@ export default function EditExamPage() {
   const [loadingExam, setLoadingExam] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [isPractical, setIsPractical] = useState(false);
 
   useEffect(() => {
@@ -55,7 +62,11 @@ export default function EditExamPage() {
         ]);
         setExamName(examRes.data.name);
         setClassId(examRes.data.class_id || "");
-        setIsPractical(Boolean(examRes.data.is_practical));
+        setIsPractical(isPracticalRoute || Boolean(examRes.data.is_practical));
+        if (!isPracticalRoute && examRes.data.is_practical) {
+          router.replace(`/provas-praticas/${examId}/edit`);
+          return;
+        }
         setQuestions(questionsRes.data.map((q) => ({ ...q, _isNew: false })));
         setClasses(classesRes.data);
       } catch {
@@ -65,7 +76,7 @@ export default function EditExamPage() {
       }
     };
     load();
-  }, [examId]);
+  }, [examId, isPracticalRoute, router]);
 
   const addQuestion = () => {
     setQuestions([
@@ -107,13 +118,12 @@ export default function EditExamPage() {
 
     setSaving(true);
     setError(null);
-    setSuccess(null);
 
     try {
       await api.put(`/exams/${examId}`, {
         name: examName.trim(),
         class_id: classId || null,
-        is_practical: isPractical,
+        is_practical: isPracticalRoute || isPractical,
       });
 
       for (const qId of deletedQuestionIds) {
@@ -139,9 +149,7 @@ export default function EditExamPage() {
       }
 
       setDeletedQuestionIds([]);
-      setSuccess("Prova atualizada com sucesso!");
-      const listPath = isPractical ? '/provas-praticas' : '/exams';
-      setTimeout(() => router.push(listPath), 1000);
+      router.push(listPath);
     } catch {
       setError("Erro ao salvar alterações.");
     } finally {
@@ -161,14 +169,14 @@ export default function EditExamPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-in fade-in duration-500">
       <div className="flex items-center gap-4">
-        <Link href={isPractical ? '/provas-praticas' : '/exams'}>
+        <Link href={listPath}>
           <button type="button" className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
             <ArrowLeft className="w-5 h-5 text-slate-500" />
           </button>
         </Link>
         <div>
           <h1 className="text-3xl font-bold tracking-tight">
-            {isPractical ? 'Editar Prova Prática' : 'Editar Prova'}
+            {isPracticalRoute || isPractical ? 'Editar Prova Prática' : 'Editar Prova'}
           </h1>
           <p className="text-slate-500 mt-1">Altere nome, turma ou questões da prova.</p>
         </div>
@@ -177,12 +185,6 @@ export default function EditExamPage() {
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-300">
           {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
-          {success}
         </div>
       )}
 
@@ -297,4 +299,8 @@ export default function EditExamPage() {
       </div>
     </div>
   );
+}
+
+export default function EditExamPage() {
+  return <EditExamPageContent mode="default" />;
 }

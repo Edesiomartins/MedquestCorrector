@@ -11,6 +11,23 @@ const inactive =
 
 function linkClass(pathname: string, href: string) {
   if (href === "/") return pathname === "/" ? active : inactive;
+
+  if (href === "/exams") {
+    const isDiscursive =
+      pathname === "/exams" ||
+      pathname === "/exams/new" ||
+      /^\/exams\/[^/]+\/edit$/.test(pathname);
+    return isDiscursive ? active : inactive;
+  }
+
+  if (href === "/provas-praticas") {
+    const isPractical =
+      pathname === "/provas-praticas" ||
+      pathname === "/provas-praticas/new" ||
+      /^\/provas-praticas\/[^/]+\/edit$/.test(pathname);
+    return isPractical ? active : inactive;
+  }
+
   return pathname === href || pathname.startsWith(`${href}/`) ? active : inactive;
 }
 

@@ -54,7 +54,7 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
       const { data } = await api.get<ExamSummary[]>('/exams', {
         params: { practical: isPracticalMode },
       });
-      setExams(data);
+      setExams(data.filter((e) => (isPracticalMode ? e.is_practical : !e.is_practical)));
       setSelectedIds(new Set());
     } catch {
       setError('Não foi possível carregar as provas.');
@@ -67,7 +67,7 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
     void loadExams();
   }, [loadExams]);
 
-  const pageTitle = isPracticalMode ? 'Provas Práticas' : 'Provas';
+  const pageTitle = isPracticalMode ? 'Provas Práticas' : 'Provas Discursivas';
   const pageSubtitle = isPracticalMode
     ? 'Mesma configuração de provas, com folhas práticas compactas (1 linha de resposta por questão).'
     : 'Gabaritos e questões para correção assistida.';
@@ -242,7 +242,10 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
       setImportMessage(`Prova criada com sucesso. ${data.questions_created} questões importadas.`);
       setImportWarnings(data.warnings || []);
       await loadExams();
-      router.push(`/exams/${data.exam_id}/edit`);
+      const editPath = isPracticalMode
+        ? `/provas-praticas/${data.exam_id}/edit`
+        : `/exams/${data.exam_id}/edit`;
+      router.push(editPath);
     } catch (err: unknown) {
       const detail = (
         err &&
@@ -456,7 +459,7 @@ export function ExamsPageContent({ mode = 'default' }: ExamsPageProps) {
                           <span>Folhas</span>
                         </button>
 
-                        <Link href={`/exams/${ex.id}/edit`}>
+                        <Link href={isPracticalMode ? `/provas-praticas/${ex.id}/edit` : `/exams/${ex.id}/edit`}>
                           <button
                             type="button"
                             className="p-2 bg-slate-100 text-slate-600 hover:text-blue-600 hover:bg-blue-50 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-blue-900/30 transition-colors rounded-lg inline-flex items-center space-x-1.5 text-xs font-medium border border-slate-200 dark:border-slate-700"
