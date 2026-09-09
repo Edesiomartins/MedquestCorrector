@@ -32,7 +32,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-import fitz
+import pymupdf as fitz
 from PIL import Image
 from reportlab.lib.pagesizes import A4
 

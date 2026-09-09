@@ -9,7 +9,7 @@ depois. E a diferenca entre entregar ~8 px de altura-de-x ao modelo e entregar
 
 import json
 
-import fitz
+import pymupdf as fitz
 import pytest
 from reportlab.lib.pagesizes import A4
 

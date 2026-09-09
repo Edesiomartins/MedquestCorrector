@@ -6,7 +6,7 @@ pelo mesmo servico de geometria. Sem manifesto, o caminho de pagina inteira
 continua valendo -- provas antigas nao podem parar de funcionar.
 """
 
-import fitz
+import pymupdf as fitz
 import pytest
 from reportlab.lib.pagesizes import A4
 

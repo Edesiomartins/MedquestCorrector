@@ -143,7 +143,7 @@ def test_generated_sheet_does_not_truncate_long_question_text():
         ],
     )
 
-    import fitz
+    import pymupdf as fitz
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     try:

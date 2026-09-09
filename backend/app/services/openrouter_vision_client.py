@@ -230,7 +230,16 @@ def _build_prompt(context: dict) -> str:
     return "\n\n".join(parts)
 
 
-def _vision_model_candidates(primary: str) -> list[str]:
+def _vision_model_candidates(primary: str, *, allow_fallback: bool = True) -> list[str]:
+    if not allow_fallback:
+        # Benchmark: o modelo pedido E o objeto da medicao. Cair para o proximo
+        # da cadeia transformaria "modelo A falhou" em "modelo B respondeu" --
+        # exatamente o resultado que o experimento nao pode registrar.
+        model = (primary or "").strip()
+        if not model:
+            raise OpenRouterVisionError("Modelo de visao explicito exigido quando o fallback esta desligado.")
+        return [model]
+
     text_model = settings.OPENROUTER_TEXT_MODEL.strip()
     fallbacks = _split_csv(settings.OPENROUTER_VISION_FALLBACKS)
     candidates = [primary or settings.OPENROUTER_VISION_MODEL, *fallbacks]
@@ -479,6 +488,7 @@ def transcribe_answer_crop(
     image_path: str,
     question_number: int | None = None,
     vision_model: str | None = None,
+    allow_fallback: bool = True,
 ) -> dict:
     """Transcreve UM recorte de resposta, sem saber o gabarito.
 
@@ -498,6 +508,7 @@ def transcribe_answer_crop(
         vision_model=vision_model,
         json_mode=False,
         what=f"transcrição da questão {question_number}",
+        allow_fallback=allow_fallback,
     )
 
     parsed = parse_transcription_response(raw_output)
@@ -560,9 +571,17 @@ def _call_with_fallbacks(
     vision_model: str | None,
     json_mode: bool,
     what: str,
+    allow_fallback: bool = True,
 ) -> tuple[str, str, bool]:
-    """Percorre a cadeia de modelos até um responder. Retorna (saída, modelo, houve_fallback)."""
-    models = _vision_model_candidates(str(vision_model or settings.OPENROUTER_VISION_MODEL).strip())
+    """Percorre a cadeia de modelos até um responder. Retorna (saída, modelo, houve_fallback).
+
+    Com `allow_fallback=False` a cadeia tem um elo só: o modelo pedido responde ou
+    a chamada falha. É o que o benchmark precisa — ver `_vision_model_candidates`.
+    """
+    models = _vision_model_candidates(
+        str(vision_model or settings.OPENROUTER_VISION_MODEL).strip(),
+        allow_fallback=allow_fallback,
+    )
     data_url = encode_image_to_data_url(image_path)
     errors: list[str] = []
 

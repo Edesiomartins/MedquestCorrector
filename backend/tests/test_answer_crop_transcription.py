@@ -193,3 +193,50 @@ def test_read_sheet_header_does_not_ask_for_answers(crop, monkeypatch):
     read_sheet_header(crop)
 
     assert "transcri" not in seen["prompt"].lower()
+
+
+# --- benchmark: modelo explicito, sem fallback --------------------------------
+#
+# Num benchmark o modelo pedido E o objeto da medicao. Cair para o proximo da
+# cadeia transformaria "modelo A falhou" em "modelo B respondeu" -- exatamente o
+# resultado que o experimento nao pode registrar.
+
+
+def test_explicit_model_without_fallback_calls_only_that_model(crop, monkeypatch):
+    seen = _capture(monkeypatch, "<TRANSCRICAO>x</TRANSCRICAO>")
+
+    result = transcribe_answer_crop(crop, question_number=1, vision_model="qwen/qwen3-vl-32b-instruct", allow_fallback=False)
+
+    assert seen["model"] == "qwen/qwen3-vl-32b-instruct"
+    assert result["model_used"] == "qwen/qwen3-vl-32b-instruct"
+    assert result["fallback_used"] is False
+
+
+def test_explicit_model_failure_is_not_masked_by_the_fallback_chain(crop, monkeypatch):
+    calls: list[str] = []
+
+    def flaky(model, prompt, data_url, json_mode=True):
+        calls.append(model)
+        raise RuntimeError("503")
+
+    monkeypatch.setattr(vc, "_call_openrouter_vision", flaky)
+
+    with pytest.raises(vc.OpenRouterVisionError):
+        transcribe_answer_crop(crop, question_number=1, vision_model="modelo/que-falha", allow_fallback=False)
+
+    assert calls == ["modelo/que-falha"]
+
+
+def test_production_path_keeps_the_fallback_chain(crop, monkeypatch):
+    """O default nao muda: producao continua caindo para o proximo modelo."""
+    calls: list[str] = []
+
+    def flaky(model, prompt, data_url, json_mode=True):
+        calls.append(model)
+        if len(calls) == 1:
+            raise RuntimeError("503")
+        return "<TRANSCRICAO>ok</TRANSCRICAO>"
+
+    monkeypatch.setattr(vc, "_call_openrouter_vision", flaky)
+
+    assert transcribe_answer_crop(crop, question_number=1)["fallback_used"] is True

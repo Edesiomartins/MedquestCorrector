@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 from PIL import Image
 
 logger = logging.getLogger(__name__)
