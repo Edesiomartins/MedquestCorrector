@@ -50,6 +50,37 @@ STRUCTURE_CLASSES = {
 
 LATERALITY_WORDS = frozenset({"esquerdo", "esquerda", "direito", "direita"})
 
+# Qualificadores anatômicos críticos, agrupados por eixo. Dentro de um grupo os
+# termos são mutuamente exclusivos: "papilar anterior" e "papilar posterior" são
+# músculos diferentes, não duas leituras do mesmo. Trocar um pelo outro é erro —
+# mandar isso para revisão humana gasta o professor com uma decisão que a regra
+# já sabe tomar.
+#
+# Direito/esquerdo também são críticos, mas moram no eixo de lateralidade, que já
+# tem tratamento e razão próprios (`_laterality_compatible`).
+QUALIFIER_GROUPS = {
+    # Posição no eixo ântero-posterior. "média" entra aqui porque a série
+    # anterior/média/posterior é a que nomeia cerebrais e meníngeas; "septal"
+    # porque é a terceira posição dos músculos papilares.
+    "anterior": "antero_posterior",
+    "posterior": "antero_posterior",
+    "media": "antero_posterior",
+    "medio": "antero_posterior",
+    "septal": "antero_posterior",
+    "medial": "medial_lateral",
+    "lateral": "medial_lateral",
+    "superior": "superior_inferior",
+    "inferior": "superior_inferior",
+}
+CRITICAL_QUALIFIERS = frozenset(QUALIFIER_GROUPS)
+
+# Abreviações de qualificador. Só valem como token inteiro: "ant" e "post" não
+# aparecem sozinhos no nome de estrutura nenhuma.
+_QUALIFIER_ABBREVIATIONS = {"ant": "anterior", "post": "posterior"}
+
+# Câmaras cardíacas: o gabarito escreve "VE"/"VD", o aluno escreve por extenso.
+_CHAMBER_ABBREVIATIONS = {"ve": "ventriculo esquerdo", "vd": "ventriculo direito"}
+
 # Siglas de uma letra só expandem quando vêm com ponto: "a." é artéria, "a"
 # sozinho é artigo. Sem essa distinção, "a cabeça longa do bíceps" viraria uma
 # artéria e conflitaria com o gabarito muscular.
@@ -123,14 +154,61 @@ def normalize_practical_answer(value: str) -> str:
     text = re.sub(r"\bdir(?:\.|eita|eito)?\b", " direito ", text)
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
+    text = _expand_qualifier_and_chamber_abbreviations(text)
+    text = " ".join(_singularize(token) for token in text.split())
     text = _normalize_trailing_laterality_token(text)
     text = _canonicalize_practical_aliases(text)
     return text
 
 
+def _expand_qualifier_and_chamber_abbreviations(text: str) -> str:
+    """"Ant."/"Post." e "VE"/"VD" para a forma escrita por extenso.
+
+    Roda depois da limpeza de pontuação (o ponto já caiu) e antes do marcador
+    final de lateralidade, senão "VD" seria lido como sigla desconhecida em vez
+    de "ventrículo direito".
+    """
+    tokens = []
+    for token in text.split():
+        expanded = _QUALIFIER_ABBREVIATIONS.get(token) or _CHAMBER_ABBREVIATIONS.get(token)
+        tokens.append(expanded or token)
+    return " ".join(tokens)
+
+
+def _singularize(token: str) -> str:
+    """Plural anatômico comum para o singular.
+
+    O gabarito diz "Músculos papilares" e o aluno diz "músculo papilar" — mesma
+    estrutura. Aplicada aos dois lados, a regra é simétrica: mesmo quando erra
+    (como em "bíceps"), erra igual dos dois lados e a comparação não se perde.
+    """
+    if len(token) < 4 or not token.endswith("s") or token.endswith(("ss", "ps")):
+        return token
+    if token.endswith("oes"):
+        return token[:-3] + "ao"
+    if token[-3:] in {"res", "les", "nes", "zes", "ses"}:
+        return token[:-2]
+    return token[:-1]
+
+
 def expected_answer_variants(expected: str) -> list[str]:
-    parts = re.split(r"\s*(?:;|\||/|\n|, ou | ou )\s*", expected)
+    """Formas aceitas do gabarito, incluindo o que está entre parênteses.
+
+    "Artéria interventricular posterior (PDA)" aceita três leituras: a frase sem
+    a sigla, a sigla sozinha, e a frase inteira. Tratar "(PDA)" como palavra
+    obrigatória reprova quem escreveu o nome completo — que é o nome certo.
+    """
+    expected = str(expected or "")
+    aliases = re.findall(r"\(([^)]*)\)", expected)
+    without_aliases = re.sub(r"\([^)]*\)", " ", expected)
+
+    parts = re.split(r"\s*(?:;|\||/|\n|, ou | ou )\s*", without_aliases)
     variants = [normalize_practical_answer(part) for part in parts if str(part).strip()]
+    for alias in aliases:
+        normalized_alias = normalize_practical_answer(alias)
+        if normalized_alias and normalized_alias not in variants:
+            variants.append(normalized_alias)
+
     normalized_full = normalize_practical_answer(expected)
     if normalized_full and normalized_full not in variants:
         variants.append(normalized_full)
@@ -162,8 +240,8 @@ def match_answer(answer_raw: str, expected_raw: str) -> MatchResult:
 
 
 def _match_variant(answer_norm: str, expected_norm: str) -> MatchResult:
-    answer_class, answer_core = _split_axes(answer_norm)
-    expected_class, expected_core = _split_axes(expected_norm)
+    answer_class, answer_core, answer_qualifiers = _split_axes(answer_norm)
+    expected_class, expected_core, expected_qualifiers = _split_axes(expected_norm)
     similarity = practical_similarity(answer_norm, expected_norm)
 
     matched: list[str] = []
@@ -196,11 +274,34 @@ def _match_variant(answer_norm: str, expected_norm: str) -> MatchResult:
         result.reason = "estrutura"
         return result
 
+    # Qualificador contraditório decide antes do núcleo parcial: "papilar
+    # anterior" e "papilar posterior" compartilham todo o resto do nome, e é
+    # justamente o que NÃO compartilham que separa as duas estruturas.
+    conflict = _conflicting_qualifiers(expected_qualifiers, answer_qualifiers)
+    if core_hit and conflict:
+        result.reason = "qualificador"
+        result.missing_core = [conflict[0]]
+        return result
+
     if missing and matched:
         result.status = PENDING
         result.reason = "nucleo_parcial"
         return result
     if missing:
+        return result
+
+    missing_qualifiers = [item for item in expected_qualifiers if item not in answer_qualifiers]
+    if missing_qualifiers:
+        # Sem contradição, mas o aluno não disse a posição que o gabarito pede:
+        # é omissão, e omissão o professor decide.
+        result.status = PENDING
+        result.reason = "nucleo_parcial"
+        result.missing_core = missing_qualifiers
+        return result
+
+    if _side_dropped_for_foreign_context(answer_norm, expected_norm, answer_core, expected_core):
+        result.status = PENDING
+        result.reason = "contexto_extra"
         return result
 
     if approximate:
@@ -213,9 +314,28 @@ def _match_variant(answer_norm: str, expected_norm: str) -> MatchResult:
     return result
 
 
+def _side_dropped_for_foreign_context(
+    answer_norm: str,
+    expected_norm: str,
+    answer_core: list[str],
+    expected_core: list[str],
+) -> bool:
+    """O aluno calou o lado que o gabarito pede e pôs outro contexto no lugar.
+
+    Omitir a lateralidade sozinha é tolerado — o aluno viu a peça, o lado estava
+    na mesa. Mas omitir o lado E acrescentar estrutura que o gabarito não cita
+    ("cordas tendíneas anteriores **da valva semilunar pulmonar**") é outra
+    coisa: pode ser contexto inofensivo ou pode ser região errada, e a regra não
+    tem como saber qual. Aí a resposta é do professor, não da máquina.
+    """
+    if not extract_laterality(expected_norm) or extract_laterality(answer_norm):
+        return False
+    return any(_find_token(token, expected_core) is None for token in answer_core)
+
+
 _RANK = {WRONG: 0, PENDING: 1, CORRECT: 2}
 # Entre respostas erradas, a razão específica explica melhor do que "não confere".
-_REASON_RANK = {"nao_confere": 0, "estrutura": 1, "lateralidade": 2}
+_REASON_RANK = {"nao_confere": 0, "estrutura": 1, "lateralidade": 2, "qualificador": 3}
 
 
 def _result_rank(result: MatchResult) -> tuple[int, int, float]:
@@ -226,18 +346,39 @@ def _result_rank(result: MatchResult) -> tuple[int, int, float]:
     )
 
 
-def _split_axes(normalized: str) -> tuple[str, list[str]]:
-    """Separa a classe estrutural do núcleo, descartando lado e palavras vazias."""
+def _split_axes(normalized: str) -> tuple[str, list[str], list[str]]:
+    """Separa classe estrutural, núcleo e qualificadores, descartando lado e vazias.
+
+    O qualificador sai do núcleo porque ele não identifica a estrutura: bater
+    "média" em "artéria cerebral média" e "comissura cerebelar média" não é
+    acerto parcial nenhum — é coincidência de posição entre estruturas
+    diferentes. Separado, ele vira um eixo com regra própria.
+    """
     structure = ""
     core: list[str] = []
+    qualifiers: list[str] = []
     for token in normalized.split():
         if token in STRUCTURE_CLASSES:
             structure = structure or STRUCTURE_CLASSES[token]
             continue
         if token in LATERALITY_WORDS or token in STOPWORDS:
             continue
+        if token in CRITICAL_QUALIFIERS:
+            if token not in qualifiers:
+                qualifiers.append(token)
+            continue
         core.append(token)
-    return structure, core
+    return structure, core, qualifiers
+
+
+def _conflicting_qualifiers(expected: list[str], answer: list[str]) -> tuple[str, str] | None:
+    """Devolve o par contraditório, se houver, dentro de um mesmo eixo."""
+    answer_by_group = {QUALIFIER_GROUPS[token]: token for token in answer}
+    for token in expected:
+        rival = answer_by_group.get(QUALIFIER_GROUPS[token])
+        if rival is not None and rival != token:
+            return (token, rival)
+    return None
 
 
 def _find_token(expected_token: str, answer_core: list[str]) -> str | None:

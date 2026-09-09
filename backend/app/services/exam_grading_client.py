@@ -162,6 +162,14 @@ _PRACTICAL_JUSTIFICATIONS = {
     "lateralidade": "Estrutura compatível, mas lateralidade divergente.",
     "estrutura": "Termo correto, mas a classe da estrutura diverge do gabarito.",
     "nucleo_parcial": "Resposta incompleta em relação ao gabarito. Revisão humana necessária.",
+    "qualificador": (
+        "Estrutura compatível, mas o qualificador anatômico contradiz o gabarito "
+        "(anterior/posterior, medial/lateral, superior/inferior): {expected}."
+    ),
+    "contexto_extra": (
+        "Estrutura compatível, mas o aluno omitiu a lateralidade e acrescentou "
+        "contexto anatômico que o gabarito não cita. Revisão humana necessária."
+    ),
     "leitura_aproximada": (
         "Resposta compatível com o gabarito, mas a leitura tem ruído. "
         "Revisão humana necessária."
