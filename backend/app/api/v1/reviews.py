@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.storage import path_from_local_url
+from app.services.htr_dataset_bundle import build_bundle
 from app.services.htr_labeling import export_dataset, record_review
 from app.models.exam import Exam, ExamQuestion
 from app.models.grading import QuestionScore, ResultStatus, StudentResult
@@ -245,6 +246,37 @@ def export_htr_dataset(
         content=(body + "\n") if body else "",
         media_type="application/x-ndjson",
         headers={"Content-Disposition": 'attachment; filename="labels.jsonl"'},
+    )
+
+
+@router.get("/htr-dataset-bundle")
+def export_htr_dataset_bundle(
+    exam_id: UUID = Query(..., description="Prova a exportar. Obrigatorio: nao ha exportacao global."),
+    limit: int = Query(default=1000, ge=1, le=20000),
+    db: Session = Depends(get_db),
+):
+    """Exporta o dataset HTR de UMA prova como ZIP portatil.
+
+    Diferente de `/htr-dataset`, que devolve so o `labels.jsonl` com caminhos
+    internos do servidor, aqui vao as imagens junto e os `crop` viram caminhos
+    relativos (`crops/crop_000001.png`) — o bundle roda direto no
+    `scripts/benchmark_htr_models.py` em qualquer maquina.
+
+    `exam_id` e obrigatorio de proposito: exportacao global de todos os recortes
+    do sistema num arquivo so e uma superficie de vazamento que esta etapa nao
+    abre. O conteudo passa por lista branca de campos — nenhum dado de aluno,
+    gabarito ou criterio de correcao entra no arquivo.
+    """
+    rows = export_dataset(db, exam_id=exam_id, limit=limit)
+    payload, manifest = build_bundle(rows, exam_id=exam_id)
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="medquest_htr_dataset_{exam_id}.zip"',
+            "X-Htr-Samples-Exported": str(manifest["samples_exported"]),
+            "X-Htr-Missing-Crops": str(manifest["missing_crops"]),
+        },
     )
 
 

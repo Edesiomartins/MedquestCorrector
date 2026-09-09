@@ -31,6 +31,89 @@ comparação:
 A transcrição continua **cega**: a referência humana vai para o arquivo de
 resultado, nunca para o prompt. Há teste automatizado para isso.
 
+## Exportando o dataset pelo MedquestCorrector
+
+O caminho mais curto para ter um dataset: o professor revisa as provas
+normalmente e o sistema entrega o conjunto pronto, com as imagens junto.
+
+```
+GET /reviews/htr-dataset-bundle?exam_id=<uuid>&limit=1000
+```
+
+Autenticado (Bearer, como o resto de `/reviews`). Devolve
+`medquest_htr_dataset_<exam_id>.zip`:
+
+```
+labels.jsonl
+manifest.json
+crops/
+    crop_000001.png
+    crop_000002.png
+    ...
+```
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+     "$API/reviews/htr-dataset-bundle?exam_id=$EXAM_ID" \
+     -o bundle.zip
+unzip bundle.zip -d eval/prova-x
+
+# roda direto, sem --crops: os caminhos ja sao relativos ao proprio bundle
+python scripts/benchmark_htr_models.py \
+    --labels eval/prova-x/labels.jsonl \
+    --models "google/gemma-4-31b-it:free" "qwen/qwen3-vl-32b-instruct" \
+    --dry-run
+```
+
+Os `crop` dentro do `labels.jsonl` são relativos (`crops/crop_000001.png`), então
+o bundle roda em qualquer máquina, sem `--crops` — descompacte e aponte o
+`--labels` para dentro dele.
+
+### O que o bundle contém — e o que não contém
+
+Contém, por linha: `crop`, `reference`, `question`, `strata`,
+`model_transcription`, `cer_at_review`. Nada mais. A cópia é feita por **lista
+branca** de campos: nome, matrícula, e-mail, `student_id`, cabeçalho da prova,
+gabarito, `expected_answer` e critério de correção não têm por onde entrar — nem
+hoje, nem quando alguém acrescentar um campo novo ao export.
+
+Os nomes de arquivo são sequenciais (`crop_000001.png`), nunca derivados da
+resposta ou do aluno: o nome de um arquivo aparece na listagem do ZIP.
+
+`manifest.json`:
+
+```json
+{
+  "exam_id": "…",
+  "samples_exported": 187,
+  "missing_crops": 3,
+  "rejected_paths": 0,
+  "empty_references": 24,
+  "created_at": "2026-09-09T15:20:00+00:00"
+}
+```
+
+- `missing_crops` — rótulos ignorados porque o PNG não estava no disco. A
+  exportação não para por causa deles; se esse número for alto, os recortes do
+  lote foram limpos e o conjunto ficou menor do que parece.
+- `rejected_paths` — subconjunto do anterior: caminhos que a resolução segura
+  recusou (fora da área de upload, absolutos, ou registros antigos no formato
+  `batch=…/page=…`). Diferente de zero merece um olhar no log.
+- `empty_references` — caixas em branco. Mire em ~15% do conjunto: são elas que
+  medem alucinação.
+
+### Limites desta versão
+
+- **`exam_id` é obrigatório.** Não existe exportação global de todos os recortes
+  do sistema num arquivo só; é uma superfície de vazamento que esta etapa não
+  abre. Para juntar várias provas, exporte um bundle por prova e concatene os
+  `labels.jsonl` você mesmo, renomeando os crops.
+- O endpoint antigo `GET /reviews/htr-dataset` continua igual, devolvendo só o
+  `labels.jsonl` com caminhos internos do servidor.
+- O `reference` do bundle é a transcrição do professor feita na revisão. Ela é
+  boa referência para CER, mas não passou por uma segunda leitura — para o
+  conjunto "oficial" de avaliação, ver [HTR_EVAL_SET.md](HTR_EVAL_SET.md).
+
 ## Como preparar o dataset
 
 O formato é o mesmo do arnês de avaliação — ver
