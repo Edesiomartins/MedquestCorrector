@@ -107,6 +107,26 @@ _PLAIN_ABBREVIATIONS = {
     "os": "osso",
 }
 
+# Sinônimos anatômicos explícitos: nomes diferentes para a MESMA estrutura.
+# Cada entrada canoniza os dois lados da comparação para a mesma forma, então o
+# alias vale nos dois sentidos (gabarito e resposta) sem abrir tolerância
+# genérica nenhuma: só a grafia listada aqui passa, e "média" continua diferente
+# de "magna".
+_ANATOMIC_SYNONYMS = (
+    # A veia cardíaca média é a veia interventricular posterior.
+    (r"\bveia cardiaca media\b", "veia interventricular posterior"),
+    # Frontobasilar, fronto-basilar e frontobasal nomeiam a mesma artéria. O
+    # hífen já virou espaço na limpeza de pontuação, daí o \s* no meio. O
+    # prefixo "fronto" é obrigatório: "basilar" sozinho é outra artéria.
+    (r"\bfronto\s*bas(?:ilar|al)\b", "frontobasilar"),
+)
+
+# Estruturas medianas, em que acrescentar lado é anatomicamente impossível.
+# Lista curta e explícita, comparada contra a chave "classe + núcleo +
+# qualificadores" do gabarito — nunca uma regra genérica para toda estrutura que
+# o gabarito escreveu sem lado.
+NON_LATERALIZED_STRUCTURES = frozenset({"arteria basilar"})
+
 _COMPACT_PREFIXES = sorted(
     [*_PLAIN_ABBREVIATIONS, *_DOTTED_ABBREVIATIONS], key=len, reverse=True
 )
@@ -304,6 +324,13 @@ def _match_variant(answer_norm: str, expected_norm: str) -> MatchResult:
         result.reason = "contexto_extra"
         return result
 
+    if _side_added_to_median_structure(
+        answer_norm, expected_norm, expected_class, expected_core, expected_qualifiers
+    ):
+        result.status = PENDING
+        result.reason = "lateralidade_indevida"
+        return result
+
     if approximate:
         result.status = PENDING
         result.reason = "leitura_aproximada"
@@ -331,6 +358,28 @@ def _side_dropped_for_foreign_context(
     if not extract_laterality(expected_norm) or extract_laterality(answer_norm):
         return False
     return any(_find_token(token, expected_core) is None for token in answer_core)
+
+
+def _side_added_to_median_structure(
+    answer_norm: str,
+    expected_norm: str,
+    expected_class: str,
+    expected_core: list[str],
+    expected_qualifiers: list[str],
+) -> bool:
+    """O aluno lateralizou uma estrutura mediana da lista de não lateralizadas.
+
+    A artéria basilar é única e mediana: "artéria basilar direita" não existe. O
+    núcleo está certo, então zerar é duro demais; dar nota cheia é aceitar uma
+    afirmação anatomicamente impossível. A decisão fica com o professor.
+
+    Vale só para `NON_LATERALIZED_STRUCTURES`: em todas as outras estruturas,
+    gabarito sem lado continua aceitando resposta com lado.
+    """
+    if extract_laterality(expected_norm) or not extract_laterality(answer_norm):
+        return False
+    key = " ".join([expected_class, *expected_core, *expected_qualifiers]).strip()
+    return key in NON_LATERALIZED_STRUCTURES
 
 
 _RANK = {WRONG: 0, PENDING: 1, CORRECT: 2}
@@ -468,4 +517,6 @@ def _canonicalize_practical_aliases(text: str) -> str:
     out = re.sub(r"\bbucinator\b", " bucinador ", out)
     out = re.sub(r"\bhalix\b", " halux ", out)
     out = re.sub(r"\bvleo\b", " soleo ", out)
+    for pattern, canonical in _ANATOMIC_SYNONYMS:
+        out = re.sub(pattern, f" {canonical} ", out)
     return re.sub(r"\s+", " ", out).strip()

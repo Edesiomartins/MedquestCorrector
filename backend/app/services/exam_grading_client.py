@@ -174,6 +174,10 @@ _PRACTICAL_JUSTIFICATIONS = {
         "Resposta compatível com o gabarito, mas a leitura tem ruído. "
         "Revisão humana necessária."
     ),
+    "lateralidade_indevida": (
+        "Núcleo correto, mas o aluno acrescentou uma lateralidade incompatível "
+        "com uma estrutura mediana: {expected}. Revisão humana necessária."
+    ),
     "nao_confere": "Resposta prática não confere com o gabarito esperado: {expected}.",
 }
 

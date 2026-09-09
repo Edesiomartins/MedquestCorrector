@@ -180,3 +180,116 @@ def test_missing_side_plus_foreign_context_goes_to_review_not_to_full_score():
     assert out["verdict"] != "correta"
     assert out["score"] != 1.0
     assert out["needs_human_review"] is True
+
+
+# ---------------------------------------------------------------------------
+# Hotfix final: tres casos que sobraram da prova real. Cada bloco tem o caso que
+# passou a valer E as guardas que continuam reprovando — o alias so pode aceitar
+# o sinonimo exato, nunca afrouxar classe, lado ou qualificador.
+# ---------------------------------------------------------------------------
+
+
+# --- caso 1: sinonimo anatomico explicito ------------------------------------
+
+
+def test_middle_cardiac_vein_matches_posterior_interventricular_vein():
+    """Veia cardiaca media e veia interventricular posterior sao o mesmo vaso."""
+    out = _grade("Veia Cardíaca Média", "Veia interventricular posterior")
+
+    assert out["verdict"] == "correta"
+    assert out["score"] == 1.0
+
+
+def test_posterior_interventricular_vein_matches_middle_cardiac_vein():
+    """O alias vale nos dois sentidos: gabarito e resposta trocam de lugar."""
+    out = _grade("Veia interventricular posterior", "Veia cardíaca média")
+
+    assert out["verdict"] == "correta"
+    assert out["score"] == 1.0
+
+
+def test_middle_cardiac_vein_is_not_the_great_cardiac_vein():
+    """Guarda: media e magna sao veias diferentes; o alias nao pode aproximar."""
+    out = _grade("Veia cardíaca média", "veia cardíaca magna")
+
+    assert out["verdict"] == "incorreta"
+    assert out["score"] == 0.0
+
+
+def test_vein_alias_does_not_cross_the_structure_class():
+    """Guarda: o alias e de veia; a arteria homonima continua sendo outra classe."""
+    out = _grade("Veia interventricular posterior", "artéria interventricular posterior")
+
+    assert out["verdict"] == "incorreta"
+    assert out["score"] == 0.0
+    assert "estrutura" in out["justification"].lower()
+
+
+# --- caso 2: variacao frontobasilar ------------------------------------------
+
+
+def test_hyphenated_frontobasilar_matches():
+    out = _grade("Artéria Frontobasilar Medial E", "Artéria fronto-basilar medial esquerda")
+
+    assert out["verdict"] == "correta"
+    assert out["score"] == 1.0
+
+
+def test_frontobasal_matches_frontobasilar():
+    out = _grade("Artéria Frontobasilar Medial E", "Artéria frontobasal medial esquerda")
+
+    assert out["verdict"] == "correta"
+    assert out["score"] == 1.0
+
+
+def test_frontobasilar_variation_does_not_excuse_the_qualifier():
+    """Guarda: medial e lateral continuam contraditorios apesar da grafia aceita."""
+    out = _grade("Artéria Frontobasilar Medial E", "Artéria frontobasal lateral esquerda")
+
+    assert out["verdict"] == "incorreta"
+    assert out["score"] == 0.0
+    assert out["needs_human_review"] is False
+
+
+def test_frontobasilar_variation_does_not_excuse_the_side():
+    """Guarda: o lado continua obrigatorio."""
+    out = _grade("Artéria frontobasilar medial E", "artéria frontobasilar medial D")
+
+    assert out["verdict"] == "incorreta"
+    assert out["score"] == 0.0
+    assert "lateralidade" in out["justification"].lower()
+
+
+# --- caso 3: estruturas inequivocamente nao lateralizadas --------------------
+
+
+def test_basilar_artery_without_side_is_correct():
+    out = _grade("Artéria Basilar", "Artéria basilar")
+
+    assert out["verdict"] == "correta"
+    assert out["score"] == 1.0
+
+
+def test_basilar_artery_with_right_side_goes_to_review():
+    """Nucleo certo, lateralidade impossivel numa estrutura mediana: quem decide e o professor."""
+    out = _grade("Artéria Basilar", "Artéria basilar direita")
+
+    assert out["verdict"] == "revisao_pendente"
+    assert out["score"] is None
+    assert out["needs_human_review"] is True
+
+
+def test_basilar_artery_with_left_side_goes_to_review():
+    out = _grade("Artéria Basilar", "Artéria basilar esquerda")
+
+    assert out["verdict"] == "revisao_pendente"
+    assert out["score"] is None
+    assert out["needs_human_review"] is True
+
+
+def test_basilar_artery_does_not_accept_another_vessel():
+    """Guarda: a lista de nao lateralizadas nao pode virar tolerancia a nucleo errado."""
+    out = _grade("Artéria Basilar", "artéria cerebral média direita")
+
+    assert out["verdict"] == "incorreta"
+    assert out["score"] == 0.0
