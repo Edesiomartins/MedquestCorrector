@@ -51,6 +51,12 @@ class HTRBatchError(RuntimeError):
     """Falha operacional esperada do HTR V2; a página pode cair no V1."""
 
 
+def _htr_token_or_na(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return str(value)
+
+
 # Guardas semanticas: detectam rubrica trocada comparando termos esperados com o
 # texto da rubrica daquela questao. NAO existe default global -- termos fixos de
 # um assunto zeravam indevidamente as questoes 1-3 de provas de outros assuntos
@@ -360,10 +366,17 @@ def analyze_discursive_exam_pdf(
         }
         audit_path = work_dir / "visual_exam_result.json"
         audit_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        elapsed_total = time.perf_counter() - started_total
         logger.info(
             "Processamento visual concluído",
-            extra={"elapsed_seconds": round(time.perf_counter() - started_total, 3)},
+            extra={"elapsed_seconds": round(elapsed_total, 3)},
         )
+        if bool(options.get("htr_batch_page_enabled", settings.HTR_BATCH_PAGE_ENABLED)):
+            logger.warning(
+                "[HTR-V2-RUN] pages=%s elapsed=%.3fs",
+                len(page_images_to_process),
+                elapsed_total,
+            )
         return {**result, "_raw_students": students}
     except Exception as exc:
         logger.exception("Falha no pipeline de leitura visual.")
@@ -934,6 +947,19 @@ def _read_page_by_batch(
                 "completion_tokens": usage.get("completion_tokens"),
                 "total_tokens": usage.get("total_tokens"),
             },
+        )
+        logger.warning(
+            "[HTR-V2-METRICS] page=%s model=%s questions=%s sheets=%s elapsed=%.3fs "
+            "prompt_tokens=%s completion_tokens=%s total_tokens=%s model_fallback=%s",
+            physical_page_number,
+            model_used,
+            len(expected_numbers),
+            len(contact_sheet_paths),
+            elapsed,
+            _htr_token_or_na(usage.get("prompt_tokens")),
+            _htr_token_or_na(usage.get("completion_tokens")),
+            _htr_token_or_na(usage.get("total_tokens")),
+            "true" if fallback_used else "false",
         )
 
         for question in batch["questions"]:

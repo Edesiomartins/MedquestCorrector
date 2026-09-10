@@ -326,3 +326,104 @@ def test_more_than_fifteen_questions_skips_v2_and_uses_v1(monkeypatch, tmp_path)
     assert len(v1_calls) == 1
     assert result["read_strategy"] == "manifest_crops"
     assert any("15" in item for item in warnings)
+
+
+def test_htr_v2_metrics_log_is_visible_and_safe(monkeypatch, tmp_path, caplog):
+    import logging
+
+    secret_answer = "Artéria basilar do aluno 009"
+    _install_crop_prep(monkeypatch)
+    monkeypatch.setattr(vep.settings, "OPENROUTER_API_KEY", "sk-secret-test-key")
+
+    def fake_batch(**kwargs):
+        payload = _batch_result(
+            list(kwargs["expected_question_numbers"]),
+            usage={"prompt_tokens": 12345, "completion_tokens": 500, "total_tokens": 12845},
+        )
+        for question in payload["questions"]:
+            question["answer_transcription"] = secret_answer
+        payload["model_used"] = "openai/gpt-5.6-sol"
+        return payload
+
+    monkeypatch.setattr(vep, "transcribe_answer_batch", fake_batch)
+    caplog.set_level(logging.WARNING, logger="app.services.visual_exam_pipeline")
+
+    result, _warnings = _read(
+        tmp_path,
+        list(range(1, 11)),
+        {"htr_batch_page_enabled": True, "vision_model": "openai/gpt-5.6-sol"},
+    )
+
+    metrics = [record.getMessage() for record in caplog.records if "[HTR-V2-METRICS]" in record.getMessage()]
+    assert len(metrics) == 1
+    line = metrics[0]
+    assert "page=1" in line
+    assert "model=openai/gpt-5.6-sol" in line
+    assert "questions=10" in line
+    assert "sheets=2" in line
+    assert "elapsed=" in line
+    assert "prompt_tokens=12345" in line
+    assert "completion_tokens=500" in line
+    assert "total_tokens=12845" in line
+    assert "model_fallback=false" in line
+    assert secret_answer not in line
+    assert "sk-secret-test-key" not in line
+    assert "ALUNO" not in line
+    assert "009" not in line
+    assert result["read_strategy"] == "manifest_batch_v2"
+    assert result["questions"][0]["answer_transcription"] == secret_answer
+
+
+def test_htr_v2_metrics_log_shows_na_when_usage_is_missing(monkeypatch, tmp_path, caplog):
+    import logging
+
+    _install_crop_prep(monkeypatch)
+
+    def fake_batch(**kwargs):
+        payload = _batch_result(list(kwargs["expected_question_numbers"]), usage=None)
+        payload["usage"] = None
+        return payload
+
+    monkeypatch.setattr(vep, "transcribe_answer_batch", fake_batch)
+    caplog.set_level(logging.WARNING, logger="app.services.visual_exam_pipeline")
+
+    result, _warnings = _read(tmp_path, [1, 2], {"htr_batch_page_enabled": True})
+
+    line = next(record.getMessage() for record in caplog.records if "[HTR-V2-METRICS]" in record.getMessage())
+    assert "prompt_tokens=n/a" in line
+    assert "completion_tokens=n/a" in line
+    assert "total_tokens=n/a" in line
+    assert result["read_strategy"] == "manifest_batch_v2"
+
+
+def test_htr_v2_run_summary_log(monkeypatch, tmp_path, caplog):
+    import logging
+
+    page = _page_image(tmp_path)
+    pdf = tmp_path / "prova.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(vep, "render_pdf_to_images", lambda *a, **k: [page])
+    monkeypatch.setattr(vep, "load_manifest", lambda *a, **k: None)
+    monkeypatch.setattr(
+        vep,
+        "_read_page",
+        lambda **kwargs: {
+            "student": {},
+            "physical_page": 1,
+            "questions": [],
+            "model_used": "vision-mock",
+            "fallback_used": False,
+        },
+    )
+    monkeypatch.setattr(vep.settings, "HTR_BATCH_PAGE_ENABLED", True)
+    caplog.set_level(logging.WARNING, logger="app.services.visual_exam_pipeline")
+
+    result = vep.analyze_discursive_exam_pdf(str(pdf), {"questions": []}, {"htr_batch_page_enabled": True})
+
+    run_lines = [record.getMessage() for record in caplog.records if "[HTR-V2-RUN]" in record.getMessage()]
+    assert result["status"] == "success"
+    assert len(run_lines) == 1
+    assert "pages=1" in run_lines[0]
+    assert "elapsed=" in run_lines[0]
+    assert "sk-" not in run_lines[0]
+
