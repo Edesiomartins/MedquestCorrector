@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, FileText, CheckSquare, Users, ScanText, ClipboardList, History } from "lucide-react";
+import { Home, FileText, CheckSquare, Users, ScanText, ClipboardList, History, FileSearch } from "lucide-react";
 import { useExamNav, type ExamNavSection } from "@/contexts/ExamNavContext";
 
 const active =
@@ -59,6 +59,10 @@ export default function Sidebar() {
         <Link href="/exams" className={linkClass(pathname, "/exams", section)}>
           <FileText className="w-5 h-5" />
           <span>Provas Discursivas</span>
+        </Link>
+        <Link href="/discursive-import" className={linkClass(pathname, "/discursive-import", section)}>
+          <FileSearch className="w-5 h-5" />
+          <span>Importar Discursiva</span>
         </Link>
         <Link href="/provas-praticas" className={linkClass(pathname, "/provas-praticas", section)}>
           <ClipboardList className="w-5 h-5" />
