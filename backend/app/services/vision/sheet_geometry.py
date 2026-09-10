@@ -120,9 +120,29 @@ class ManifestPageGeometry:
 class SheetManifest:
     version: int
     pages: dict[int, ManifestPageGeometry]
+    # External discursive templates define one layout that repeats for every
+    # student in an uploaded scan bundle. Generated answer sheets keep this false.
+    template_repeat: bool = False
+    template_page_count: int = 0
 
     def page(self, physical_index: int) -> ManifestPageGeometry | None:
-        return self.pages.get(int(physical_index))
+        index = int(physical_index)
+        direct = self.pages.get(index)
+        if direct is not None or not self.template_repeat:
+            return direct
+
+        count = self.template_page_count or len(self.pages)
+        if count <= 0:
+            return None
+        repeated_index = index % count
+        repeated = self.pages.get(repeated_index)
+        if repeated is not None:
+            return repeated
+
+        # Defensive fallback for a hand-edited manifest whose page indexes are
+        # not contiguous. Import-generated manifests are always 0..N-1.
+        keys = sorted(self.pages)
+        return self.pages.get(keys[index % len(keys)]) if keys else None
 
     @property
     def has_boxes(self) -> bool:
@@ -227,7 +247,17 @@ def load_manifest(raw: str | dict | None) -> SheetManifest | None:
 
     if not pages:
         return None
-    return SheetManifest(version=int(_float(data.get("version")) or 1), pages=pages)
+
+    template_repeat = bool(data.get("template_repeat", False))
+    template_page_count = int(
+        _float(data.get("template_page_count")) or (len(pages) if template_repeat else 0)
+    )
+    return SheetManifest(
+        version=int(_float(data.get("version")) or 1),
+        pages=pages,
+        template_repeat=template_repeat,
+        template_page_count=max(0, template_page_count),
+    )
 
 
 def box_to_pixels(
