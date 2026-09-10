@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
-from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -14,6 +13,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.exam import Exam, ExamQuestion
+from app.services.discursive_import.canonical_pdf import add_student_identity_header
 from app.services.discursive_import.layout_detector import (
     build_template_manifest,
     detect_pdf_layout,
@@ -70,14 +70,6 @@ def _safe_title(filename: str) -> str:
     return stem[:200] or "Prova discursiva externa"
 
 
-def _page_payload_for_confirm(page: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "page_index": int(page["page_index"]),
-        "width_pt": float(page["width_pt"]),
-        "height_pt": float(page["height_pt"]),
-    }
-
-
 @router.post("/detect")
 async def detect_external_discursive_layout(file: UploadFile = File(...)):
     _ensure_enabled()
@@ -109,8 +101,11 @@ async def detect_external_discursive_layout(file: UploadFile = File(...)):
         extra_warnings: list[str] = []
         if suffix == ".docx":
             normalized = normalize_docx_to_pdf(raw)
-            canonical_pdf = normalized["canonical_pdf"]
+            canonical_pdf = add_student_identity_header(normalized["canonical_pdf"])
             extra_warnings.extend(normalized.get("warnings") or [])
+            extra_warnings.append(
+                "O PDF canônico inclui campos de Nome e Matrícula em todas as páginas para identificação dos scans."
+            )
             detected = detect_pdf_layout(canonical_pdf)
             detected["source_format"] = "docx"
         else:
@@ -120,7 +115,7 @@ async def detect_external_discursive_layout(file: UploadFile = File(...)):
             raise ValueError(f"A importação aceita até {MAX_IMPORT_PAGES} páginas por prova discursiva.")
 
         warnings = [*extra_warnings, *(detected.get("warnings") or [])]
-        response: dict[str, Any] = {
+        response = {
             "ok": True,
             "source_format": detected.get("source_format") or suffix.lstrip("."),
             "suggested_title": _safe_title(filename),
