@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     # Maximo de crops por contact sheet. Valores inseguros sao limitados no builder.
     HTR_BATCH_PAGE_MAX_QUESTIONS_PER_SHEET: int = 8
 
+    # Importação universal de provas discursivas externas. Mantida atrás de flag
+    # para permitir rollout e rollback sem tocar no fluxo de provas práticas.
+    DISCURSIVE_UNIVERSAL_IMPORT_ENABLED: bool = False
+
     OCR_PROVIDER: str = "mistral,google_vision"
     MISTRAL_API_KEY: str = ""
     MISTRAL_OCR_MODEL: str = "mistral-ocr-latest"
