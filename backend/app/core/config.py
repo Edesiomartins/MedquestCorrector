@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     HTR_TTA_VARIANTS: int = 2
     # Modelo de familia diferente para segunda opiniao. Vazio desliga o consenso.
     HTR_CONSENSUS_MODEL: str = "google/gemini-2.5-flash"
+    # HTR V2: uma chamada multimodal por aluno/pagina (contact sheets).
+    # Default False ate validacao manual em producao.
+    HTR_BATCH_PAGE_ENABLED: bool = False
+    # Maximo de crops por contact sheet. Valores inseguros sao limitados no builder.
+    HTR_BATCH_PAGE_MAX_QUESTIONS_PER_SHEET: int = 8
 
     OCR_PROVIDER: str = "mistral,google_vision"
     MISTRAL_API_KEY: str = ""

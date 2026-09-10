@@ -16,10 +16,13 @@ from app.core.config import settings
 from app.services.exam_grading_client import grade_discursive_answer, grade_practical_answer
 from app.services.exam_image_preprocess import maybe_crop_answer_regions, normalize_page_image
 from app.services.openrouter_vision_client import (
+    OpenRouterVisionError,
     extract_answers_from_page_image,
     read_sheet_header,
+    transcribe_answer_batch,
     transcribe_answer_crop,
 )
+from app.services.vision.contact_sheet import ContactSheetItem, build_contact_sheets
 from app.services.pdf_page_renderer import render_pdf_to_images
 from app.services.vision.escalation import (
     Hypothesis,
@@ -40,6 +43,14 @@ CROP_DPI = DEFAULT_CROP_DPI
 UPSCALE_CROP_BELOW_PX = 700
 # Faixa superior da pagina onde ficam nome, matricula e turma.
 HEADER_CROP_FRACTION = 0.22
+# HTR V2 lê no máximo este número de questões por aluno/página.
+HTR_BATCH_MAX_QUESTIONS = 15
+
+
+class HTRBatchError(RuntimeError):
+    """Falha operacional esperada do HTR V2; a página pode cair no V1."""
+
+
 # Guardas semanticas: detectam rubrica trocada comparando termos esperados com o
 # texto da rubrica daquela questao. NAO existe default global -- termos fixos de
 # um assunto zeravam indevidamente as questoes 1-3 de provas de outros assuntos
@@ -618,7 +629,7 @@ def _read_page(
     """
     manifest_page = manifest.page(page_index) if manifest else None
     if manifest_page is not None and manifest_page.has_boxes:
-        return _read_page_by_crops(
+        crop_kwargs = dict(
             pdf_path=pdf_path,
             page_image=page_image,
             page_index=page_index,
@@ -628,6 +639,44 @@ def _read_page(
             crop_dir=crop_dir,
             warnings=warnings,
         )
+        if bool(options.get("htr_batch_page_enabled", settings.HTR_BATCH_PAGE_ENABLED)):
+            question_count = len(manifest_page.boxes)
+            if question_count > HTR_BATCH_MAX_QUESTIONS:
+                message = (
+                    f"Página {physical_page_number} tem {question_count} questões; "
+                    f"HTR V2 admite no máximo {HTR_BATCH_MAX_QUESTIONS}. "
+                    "Usando leitura por recorte (V1)."
+                )
+                logger.warning(
+                    "HTR V2 ignorado: excesso de questões",
+                    extra={
+                        "physical_page": physical_page_number,
+                        "question_count": question_count,
+                        "max_questions": HTR_BATCH_MAX_QUESTIONS,
+                        "fallback_to_v1": True,
+                        "fallback_reason": "too_many_questions",
+                    },
+                )
+                warnings.append(message)
+                return _read_page_by_crops(**crop_kwargs)
+            try:
+                return _read_page_by_batch(**crop_kwargs)
+            except HTRBatchError as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "HTR V2 falhou; fallback para V1",
+                    extra={
+                        "physical_page": physical_page_number,
+                        "fallback_to_v1": True,
+                        "fallback_reason": reason,
+                    },
+                )
+                warnings.append(
+                    f"HTR V2 falhou na página {physical_page_number}; "
+                    f"usando leitura por recorte (V1): {reason}"
+                )
+                return _read_page_by_crops(**crop_kwargs)
+        return _read_page_by_crops(**crop_kwargs)
 
     if manifest is not None:
         warnings.append(
@@ -774,6 +823,145 @@ def _read_page_by_crops(
         "model_used": model_used,
         "fallback_used": fallback_used,
         "read_strategy": "manifest_crops",
+    }
+
+
+def _read_page_by_batch(
+    *,
+    pdf_path: str,
+    page_image: str,
+    page_index: int,
+    physical_page_number: int,
+    manifest_page: Any,
+    options: dict,
+    crop_dir: Path,
+    warnings: list[str],
+) -> dict:
+    """Uma chamada multimodal por pagina: pagina contextual + contact sheets."""
+    crop_dir.mkdir(parents=True, exist_ok=True)
+
+    boxes = sorted(manifest_page.boxes, key=lambda box: int(box.question_number))
+    blank_questions: list[dict[str, Any]] = []
+    failed_questions: list[dict[str, Any]] = []
+    prepared: dict[int, dict[str, Any]] = {}
+
+    for box in boxes:
+        qnum = box.question_number
+        try:
+            crop = render_pdf_box(pdf_path, page_index, box, dpi=CROP_DPI)
+        except Exception as exc:
+            message = f"Falha ao recortar a questão {qnum} na página {physical_page_number}: {exc}"
+            logger.warning(message)
+            warnings.append(message)
+            failed_questions.append(_failed_reading_question(qnum, "", str(exc), None))
+            continue
+
+        ink = detect_ink(crop)
+        crop_path = crop_dir / f"p{physical_page_number:03d}_q{qnum:02d}.png"
+
+        if not ink.has_ink:
+            crop.save(crop_path, format="PNG", optimize=True)
+            if ink.is_marginal:
+                warnings.append(
+                    f"Página {physical_page_number}, questão {qnum}: densidade de tinta marginal; "
+                    "confirmar se a caixa está mesmo vazia."
+                )
+            blank_questions.append(_blank_answer_question(qnum, ink, str(crop_path)))
+            continue
+
+        prepared_crop = normalize_for_reading(crop, upscale_below_px=UPSCALE_CROP_BELOW_PX)
+        prepared_crop.save(crop_path, format="PNG", optimize=True)
+        prepared[qnum] = {
+            "path": str(crop_path),
+            "ink_ratio": round(ink.ink_ratio, 5),
+        }
+
+    questions: list[dict[str, Any]] = []
+    model_used = ""
+    fallback_used = False
+    requested_model = str(options.get("vision_model") or settings.OPENROUTER_VISION_MODEL)
+
+    if prepared:
+        items = [
+            ContactSheetItem(question_number=number, crop_path=meta["path"])
+            for number, meta in sorted(prepared.items())
+        ]
+        try:
+            sheets = build_contact_sheets(
+                items,
+                crop_dir / f"p{physical_page_number:03d}_sheets",
+                max_questions_per_sheet=settings.HTR_BATCH_PAGE_MAX_QUESTIONS_PER_SHEET,
+            )
+        except (FileNotFoundError, OSError) as exc:
+            raise HTRBatchError(f"Falha ao gerar/ler contact sheet: {exc}") from exc
+        expected_numbers = [item.question_number for item in items]
+        context_image_paths = [page_image]
+        contact_sheet_paths = [sheet.path for sheet in sheets]
+        started = time.perf_counter()
+        try:
+            batch = transcribe_answer_batch(
+                context_image_paths=context_image_paths,
+                contact_sheet_paths=contact_sheet_paths,
+                expected_question_numbers=expected_numbers,
+                vision_model=options.get("vision_model"),
+            )
+        except OpenRouterVisionError as exc:
+            raise HTRBatchError(str(exc)) from exc
+        elapsed = round(time.perf_counter() - started, 3)
+        returned_numbers = [int(question.get("number") or 0) for question in batch.get("questions") or []]
+        if returned_numbers != expected_numbers:
+            raise HTRBatchError(
+                "HTR V2 desalinhou a numeração das questões após a normalização: "
+                f"esperado={expected_numbers} recebido={returned_numbers}."
+            )
+
+        usage = batch.get("usage") if isinstance(batch.get("usage"), dict) else {}
+        model_used = str(batch.get("model_used") or requested_model)
+        fallback_used = bool(batch.get("fallback_used"))
+        logger.info(
+            "HTR V2 batch transcription succeeded",
+            extra={
+                "strategy": "manifest_batch_v2",
+                "physical_page": physical_page_number,
+                "requested_model": requested_model,
+                "model_used": model_used,
+                "question_count": len(expected_numbers),
+                "context_image_count": len(context_image_paths),
+                "contact_sheet_count": len(contact_sheet_paths),
+                "elapsed_seconds": elapsed,
+                "fallback_to_v1": False,
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "completion_tokens": usage.get("completion_tokens"),
+                "total_tokens": usage.get("total_tokens"),
+            },
+        )
+
+        for question in batch["questions"]:
+            meta = prepared[int(question["number"])]
+            question["answer_crop_path"] = meta["path"]
+            question["ink_ratio"] = meta["ink_ratio"]
+            questions.append(question)
+
+    questions.extend(blank_questions)
+    questions.extend(failed_questions)
+    questions.sort(key=lambda item: int(item.get("number") or 0))
+
+    student = _identify_page(
+        page_image=page_image,
+        manifest_page=manifest_page,
+        physical_page_number=physical_page_number,
+        options=options,
+        crop_dir=crop_dir,
+        warnings=warnings,
+    )
+
+    return {
+        "student": student,
+        "physical_page": physical_page_number,
+        "questions": questions,
+        "model_used": model_used,
+        "fallback_used": fallback_used,
+        "read_strategy": "manifest_batch_v2",
     }
 
 

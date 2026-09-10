@@ -612,3 +612,264 @@ def _call_with_fallbacks(
             )
 
     raise OpenRouterVisionError(f"Falha em todos os modelos de visão ({what}): " + " | ".join(errors))
+
+
+# ---------------------------------------------------------------------------
+# HTR V2: uma chamada multimodal por aluno/pagina (pagina + contact sheets).
+# ---------------------------------------------------------------------------
+
+BATCH_TRANSCRIPTION_PROMPT = """
+Transcreva EXATAMENTE o texto manuscrito das respostas do aluno.
+
+Você receberá, nesta ordem:
+1. Imagem(ns) da página da prova — apenas CONTEXTO visual da folha.
+2. Uma ou duas contact sheets com recortes em alta resolução. Estas imagens são a EVIDÊNCIA PRINCIPAL da transcrição.
+
+Cada recorte nas contact sheets tem uma etiqueta de sistema Q<n> (por exemplo Q1, Q3, Q11) colocada FORA da escrita do aluno. Use a etiqueta para identificar a questão. Não renumere as questões e não invente números.
+
+Você não sabe qual é a resposta certa e não deve tentar adivinhá-la. Transcreva o que está escrito, mesmo que pareça errado, incompleto ou sem sentido.
+
+Regras:
+- Não traduza, não corrija português, não complete palavras, não invente termos.
+- Texto RISCADO pelo aluno foi apagado por ele: omita da transcrição.
+- Palavra duvidosa: escreva sua melhor leitura seguida de [?].
+- Trecho realmente ilegível: use [ilegível].
+- Se o aluno escreveu "não sei" ou equivalente, preserve exatamente.
+
+Devolva somente JSON válido, sem markdown e sem texto fora do JSON, com exatamente as questões pedidas, uma vez cada:
+{
+  "questions": [
+    {
+      "number": 1,
+      "answer_transcription": "",
+      "reading_confidence": "alta|media|baixa",
+      "has_answer": true,
+      "reading_notes": ""
+    }
+  ]
+}
+
+reading_confidence: alta = leu tudo com clareza; media = poucos trechos duvidosos; baixa = muitos trechos duvidosos ou ilegíveis.
+""".strip()
+
+
+def transcribe_answer_batch(
+    *,
+    context_image_paths: list[str],
+    contact_sheet_paths: list[str],
+    expected_question_numbers: list[int],
+    vision_model: str | None = None,
+    allow_fallback: bool = True,
+) -> dict:
+    """Transcreve um lote de respostas em UMA chamada multimodal, sem gabarito."""
+    if not settings.OPENROUTER_API_KEY:
+        raise OpenRouterVisionError("OPENROUTER_API_KEY não configurada.")
+
+    expected = [int(number) for number in expected_question_numbers]
+    if not expected:
+        raise OpenRouterVisionError("HTR V2 exige ao menos uma questão esperada.")
+
+    image_paths = [str(path) for path in list(context_image_paths or []) + list(contact_sheet_paths or [])]
+    if not image_paths:
+        raise OpenRouterVisionError("HTR V2 exige ao menos uma imagem.")
+
+    prompt = _build_batch_prompt(expected)
+    raw_output, model, fallback_used, usage = _call_with_fallbacks_multi(
+        image_paths=image_paths,
+        prompt=prompt,
+        vision_model=vision_model,
+        json_mode=True,
+        what=f"transcrição em lote das questões {expected}",
+        allow_fallback=allow_fallback,
+    )
+
+    parsed = _load_json_object(raw_output)
+    if not isinstance(parsed, dict) or parsed.get("status") == "error":
+        raise OpenRouterVisionError("JSON inválido na transcrição em lote.")
+
+    questions = _normalize_batch_questions(parsed, expected, model=model, fallback_used=fallback_used)
+    return {
+        "questions": questions,
+        "model_used": model,
+        "fallback_used": fallback_used,
+        "usage": usage,
+        "raw_model_output": raw_output,
+    }
+
+
+def _build_batch_prompt(expected_question_numbers: list[int]) -> str:
+    labels = ", ".join(f"Q{number}" for number in expected_question_numbers)
+    numbers = ", ".join(str(number) for number in expected_question_numbers)
+    return (
+        f"{BATCH_TRANSCRIPTION_PROMPT}\n\n"
+        f"Transcreva exatamente estas questões, uma vez cada, com os números reais: {numbers}.\n"
+        f"Etiquetas de sistema nas contact sheets: {labels}."
+    )
+
+
+def _normalize_batch_questions(
+    parsed: dict,
+    expected_question_numbers: list[int],
+    *,
+    model: str,
+    fallback_used: bool,
+) -> list[dict]:
+    raw_questions = parsed.get("questions")
+    if not isinstance(raw_questions, list):
+        raise OpenRouterVisionError("Resposta de HTR V2 sem lista de questões.")
+
+    normalized: list[dict] = []
+    seen_numbers: list[int] = []
+    for item in raw_questions:
+        if not isinstance(item, dict):
+            raise OpenRouterVisionError("Questão de HTR V2 com schema inválido.")
+        number = _to_int(item.get("number"), default=0)
+        if number <= 0:
+            raise OpenRouterVisionError("Questão de HTR V2 sem número válido.")
+        seen_numbers.append(number)
+        transcription = str(item.get("answer_transcription") or "")
+        normalized.append(
+            {
+                "number": number,
+                "prompt_detected": str(item.get("prompt_detected") or ""),
+                "answer_transcription": transcription,
+                "reading_confidence": _normalize_confidence(item.get("reading_confidence")),
+                "ocr_confidence": None,
+                "reading_notes": str(item.get("reading_notes") or ""),
+                "has_answer": bool(item.get("has_answer", bool(transcription.strip()))),
+                "image_region": item.get("image_region")
+                if isinstance(item.get("image_region"), (dict, list, str))
+                else None,
+                "model_used": model,
+                "fallback_used": fallback_used,
+            }
+        )
+
+    _assert_exact_question_numbers(seen_numbers, expected_question_numbers)
+
+    by_number = {item["number"]: item for item in normalized}
+    return [by_number[number] for number in expected_question_numbers]
+
+
+def _assert_exact_question_numbers(actual: list[int], expected: list[int]) -> None:
+    expected_set = set(expected)
+    actual_set = set(actual)
+    if len(actual) != len(actual_set):
+        raise OpenRouterVisionError("HTR V2 devolveu questão duplicada.")
+    missing = [number for number in expected if number not in actual_set]
+    unexpected = [number for number in actual if number not in expected_set]
+    if missing or unexpected:
+        raise OpenRouterVisionError(
+            "HTR V2 desalinhou a numeração das questões: "
+            f"faltando={missing} inesperadas={unexpected}."
+        )
+
+
+def _normalize_usage(value: Any) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    prompt_tokens = _optional_int(value.get("prompt_tokens"))
+    completion_tokens = _optional_int(value.get("completion_tokens"))
+    total_tokens = _optional_int(value.get("total_tokens"))
+    if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+        return None
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _call_openrouter_vision_multi(
+    model: str,
+    prompt: str,
+    image_paths: list[str],
+    json_mode: bool = True,
+) -> tuple[str, dict | None]:
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    for image_path in image_paths:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": encode_image_to_data_url(image_path)},
+            }
+        )
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0,
+        "max_tokens": 8192,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    url = f"{settings.OPENROUTER_BASE_URL.rstrip('/')}/chat/completions"
+    with httpx.Client(timeout=settings.OPENROUTER_TIMEOUT_SECONDS) as client:
+        response = client.post(url, json=payload, headers=_headers())
+    logger.info(
+        "OpenRouter vision HTTP status",
+        extra={
+            "model": model,
+            "status_code": response.status_code,
+            "image_count": len(image_paths),
+        },
+    )
+    if response.status_code >= 400:
+        raise OpenRouterVisionError(f"HTTP {response.status_code}: {response.text[:500]}")
+    data = response.json()
+    return _extract_message_content(data), _normalize_usage(data.get("usage"))
+
+
+def _call_with_fallbacks_multi(
+    *,
+    image_paths: list[str],
+    prompt: str,
+    vision_model: str | None,
+    json_mode: bool,
+    what: str,
+    allow_fallback: bool = True,
+) -> tuple[str, str, bool, dict | None]:
+    models = _vision_model_candidates(
+        str(vision_model or settings.OPENROUTER_VISION_MODEL).strip(),
+        allow_fallback=allow_fallback,
+    )
+    errors: list[str] = []
+
+    for index, model in enumerate(models):
+        started = time.perf_counter()
+        try:
+            raw, usage = _call_openrouter_vision_multi(
+                model=model,
+                prompt=prompt,
+                image_paths=image_paths,
+                json_mode=json_mode,
+            )
+            logger.info(
+                "OpenRouter vision batch call succeeded",
+                extra={
+                    "model": model,
+                    "task": what,
+                    "fallback_used": index > 0,
+                    "image_count": len(image_paths),
+                    "elapsed_seconds": round(time.perf_counter() - started, 3),
+                    "prompt_tokens": (usage or {}).get("prompt_tokens"),
+                    "completion_tokens": (usage or {}).get("completion_tokens"),
+                    "total_tokens": (usage or {}).get("total_tokens"),
+                },
+            )
+            return raw, model, index > 0, usage
+        except Exception as exc:
+            errors.append(f"{model}: {exc}")
+            logger.warning(
+                "OpenRouter vision batch call failed",
+                extra={"model": model, "task": what, "error": str(exc)},
+            )
+
+    raise OpenRouterVisionError(f"Falha em todos os modelos de visão ({what}): " + " | ".join(errors))
