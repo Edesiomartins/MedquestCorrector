@@ -24,7 +24,7 @@ The first release supports:
 - Saving the confirmed geometry as a reusable manifest.
 - Applying HTR V2 to scanned answered exams using the confirmed manifest.
 - Qwen3 VL 32B Instruct as the normal low-cost VLM through the existing configurable vision-model setting.
-- Optional escalation to a stronger VLM only for difficult cases in a later phase of the same design.
+- Selective escalation of only difficult/low-confidence answer crops to a stronger configured VLM, such as GPT-5.6 Sol.
 - Erasure metadata preserved by HTR for discursive review.
 
 ## 3. Non-goals
@@ -57,9 +57,10 @@ This release does not:
 1. Professor uploads scanned answered copies.
 2. The existing student/page identification flow runs normally.
 3. The confirmed manifest supplies the answer boxes.
-4. HTR V2 renders high-resolution crops, detects blank boxes, builds contact sheets, and performs one multimodal transcription call per student/page.
-5. The existing discursive grader applies the rubric to the resulting transcription.
-6. Questions with erasure or low-confidence reading can be surfaced for professor review.
+4. HTR V2 renders high-resolution crops, detects blank boxes, builds contact sheets, and performs one multimodal transcription call per student/page using the configured normal VLM.
+5. Only answers that trigger the selective quality gate are re-read from the individual crop by the configured stronger VLM.
+6. The existing discursive grader applies the rubric to the selected/final transcription.
+7. Questions with erasure remain marked for professor review.
 
 ## 5. Detection strategy
 
@@ -155,9 +156,9 @@ The model remains configuration-driven. Do not hardcode Qwen or Sol into busines
 Recommended production configuration after current tests:
 
 - normal VLM: `qwen/qwen3-vl-32b-instruct`;
-- stronger model reserved for selective escalation when justified by measured quality and cost.
+- stronger escalation VLM: a separately configured stronger model, initially GPT-5.6 Sol if desired.
 
-The first implementation of universal layout import must not depend on Sol escalation to function.
+The normal path sends the page/context sheets once to the low-cost model. The expensive model is not part of the ordinary path and must only receive a difficult individual answer crop after the quality gate triggers.
 
 ## 10. Erasures
 
@@ -179,19 +180,26 @@ Practical-exam erasure rules are outside this feature and the practical flow rem
 
 ## 11. Low-confidence handling and selective escalation
 
-The architecture should support selective escalation, but the first universal-import implementation should keep escalation isolated behind configuration.
+Selective escalation is part of the first release but remains behind configuration so it can be disabled independently.
 
-A future/optional gate may escalate only when one or more of the following occurs:
+The quality gate should escalate only when one or more of the following occurs:
 
 - `reading_confidence=baixa`;
 - `[ilegível]` is present;
-- model reports unresolved ambiguity;
-- schema is valid but the reading is clearly uncertain;
-- another explicit quality rule is triggered.
+- model reports unresolved ambiguity in `reading_notes`;
+- schema is valid but the normalized reading carries an explicit uncertainty marker such as `[?]`;
+- another narrowly defined quality rule is explicitly configured and tested.
 
 Do not send every answer to the expensive model.
 
-If escalation is enabled, only the difficult question/crop should be sent, not the whole class or all questions again.
+When escalation triggers:
+
+1. Send only the high-resolution crop for that question to the stronger VLM.
+2. Keep the transcription stage blind to answer key/rubric.
+3. Preserve both the original normal-model reading and the escalation reading for audit metadata.
+4. Use the stronger reading as the final transcription only when the escalation call succeeds with valid schema.
+5. If escalation fails, keep the normal-model reading, mark the question for review, and do not fail the whole student's page.
+6. Erasure itself does not automatically trigger Sol; erasure is a review signal unless the reading is also uncertain.
 
 ## 12. Failure handling
 
@@ -202,11 +210,12 @@ Expected behavior:
 - Partial detection: show detected items and allow manual completion.
 - Invalid confirmed geometry: block save until corrected.
 - HTR V2 operational failure after a manifest exists: preserve the existing safe fallback behavior.
+- Selective escalation failure: retain the normal VLM reading and require review rather than reprocessing the full page.
 - Unexpected programming errors must not be silently swallowed as normal fallback.
 
 ## 13. Observability
 
-Keep the HTR metrics work separate from layout correctness, but universal-import runs should expose enough metadata to debug geometry problems.
+Keep layout correctness and HTR metrics separately understandable, but universal-import runs should expose enough metadata to debug geometry and cost problems.
 
 Useful non-sensitive logs include:
 
@@ -218,8 +227,10 @@ Useful non-sensitive logs include:
 - number of manual adjustments;
 - HTR strategy used;
 - elapsed time;
-- model used;
-- token usage when provided by OpenRouter.
+- normal model used;
+- number of selectively escalated questions;
+- escalation model used;
+- token usage for normal and escalation calls when provided by OpenRouter.
 
 Do not log student answers, prompts, images/base64, API keys, or unnecessary personal data.
 
@@ -268,18 +279,23 @@ Minimum automated coverage:
 - practical flow is unchanged;
 - question numbers are preserved end-to-end;
 - erasure metadata survives normalization and reaches review state;
-- no answer key/rubric leaks into visual transcription.
+- low-confidence answer triggers exactly one selective crop escalation when enabled;
+- high/medium-confidence answer does not trigger escalation;
+- escalation failure preserves the normal-model reading and marks review;
+- no answer key/rubric leaks into normal or escalation visual transcription.
 
 ## 16. Rollout
 
-1. Implement behind a feature flag, disabled by default.
-2. Validate with the provided style of one-question discursive sheet.
-3. Validate with a multi-question external discursive exam.
-4. Compare detected boxes visually against professor-confirmed boxes.
-5. Run answered-scan HTR tests with Qwen.
-6. Only then enable for normal production use.
+1. Implement behind a universal-discursive-import feature flag, disabled by default.
+2. Keep selective escalation behind its own feature/configuration flag.
+3. Validate with the provided style of one-question discursive sheet.
+4. Validate with a multi-question external discursive exam.
+5. Compare detected boxes visually against professor-confirmed boxes.
+6. Run answered-scan HTR tests with Qwen.
+7. Enable selective escalation on controlled tests and measure how many questions reach the stronger model, quality gain, latency, and cost.
+8. Only then enable the universal import for normal production use.
 
-Rollback must be possible by disabling the universal-discursive-import feature without affecting current practical or existing HTR V2 exams.
+Rollback must be possible by disabling universal-discursive-import and/or selective escalation without affecting current practical or existing HTR V2 exams.
 
 ## 17. Success criteria
 
@@ -290,5 +306,6 @@ The feature is successful when a professor can:
 3. correct any detection mistakes visually;
 4. save the layout;
 5. upload answered scans;
-6. have those answers read through the existing HTR V2 pipeline;
-7. review erasures/low-confidence cases without altering the practical-exam workflow.
+6. have those answers read through the existing HTR V2 pipeline with the normal low-cost VLM;
+7. automatically escalate only objectively difficult readings to the configured stronger VLM;
+8. review erasures/low-confidence cases without altering the practical-exam workflow.
