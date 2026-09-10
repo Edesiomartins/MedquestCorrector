@@ -56,7 +56,7 @@ upload_dir = settings.UPLOAD_DIR.resolve()
 upload_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(upload_dir)), name="static")
 
-from app.api.v1 import auth, exams, uploads, classes, reviews, visual_exam_analysis, history
+from app.api.v1 import auth, exams, uploads, classes, reviews, visual_exam_analysis, history, discursive_import
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
 app.include_router(exams.router, prefix="/api/v1/exams", tags=["Exams"])
@@ -64,4 +64,5 @@ app.include_router(uploads.router, prefix="/api/v1/batches", tags=["Uploads"])
 app.include_router(classes.router, prefix="/api/v1")
 app.include_router(reviews.router, prefix="/api/v1/reviews", tags=["Reviews"])
 app.include_router(history.router, prefix="/api/v1/history", tags=["History"])
+app.include_router(discursive_import.router, prefix="/api/v1/discursive-import", tags=["Importação discursiva"])
 app.include_router(visual_exam_analysis.router, prefix="/api/exams", tags=["Correção visual discursiva"])
