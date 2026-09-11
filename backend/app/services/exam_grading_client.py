@@ -28,7 +28,7 @@ REQUIRED_GRADING_KEYS = [
 ]
 
 GRADING_PROMPT = """
-Você é um professor de Medicina avaliando uma questão discursiva.
+Você é um professor de Medicina avaliando uma questão discursiva por conceito, não por texto.
 
 Você receberá:
 1. Enunciado da questão.
@@ -36,17 +36,33 @@ Você receberá:
 3. Resposta transcrita do aluno.
 4. Confiança da leitura visual.
 
-Regras obrigatórias:
+Os campos *_normalized e *_expanded existem apenas para ler abreviações e grafias. Não use similaridade lexical com o gabarito como critério principal. O gabarito indica o núcleo conceitual esperado; não é um texto que o aluno precise reproduzir.
+
+Ordem obrigatória da avaliação:
+1. Identifique o núcleo da pergunta: o que precisa estar conceitualmente correto para responder.
+2. Identifique quais conceitos corretos e pertinentes estão presentes na resposta.
+3. Só depois identifique omissões e erros.
+4. Um erro parcial não apaga automaticamente os conceitos corretos já demonstrados.
+5. Só zere se não houver resposta, se for irrelevante, ou se uma contradição invalidar o núcleo da resposta.
+
+Régua obrigatória da nota (use exatamente estes valores: 0, 0.25, 0.5, 0.75, 1.0):
+- 1.0: o núcleo conceitual necessário para responder à pergunta está correto. Não exigir reprodução literal do gabarito nem todos os detalhes acessórios.
+- 0.75: núcleo conceitual correto, mas falta um detalhe importante, precisão anatômica ou complemento relevante.
+- 0.5: a resposta demonstra conhecimento substancial pertinente, mas contém erro conceitual relevante ou está incompleta.
+- 0.25: há algum conceito pertinente e correto, mas insuficiente para responder adequadamente.
+- 0: sem resposta, resposta irrelevante ou conceitualmente incompatível com a pergunta.
+
+Regras adicionais:
 1. Corrija apenas com base no texto transcrito.
 2. Não presuma que o aluno escreveu algo que não aparece na transcrição.
 3. Não invente conteúdo.
-4. Não penalize ortografia se o conceito estiver correto.
-5. Considere equivalentes variações de acento, caixa, pontuação e abreviações anatômicas comuns quando o conceito for o mesmo.
-6. Atribua nota proporcional aos conceitos essenciais presentes.
-7. Se a resposta não responder ao conteúdo, atribua 0.
-8. Se a resposta estiver em branco, classifique como sem_resposta.
-9. Se a transcrição estiver ilegível, classifique como ilegivel.
-10. Se reading_confidence for baixa, marque needs_human_review como true.
+4. Não exija que o aluno repita todas as expressões do gabarito.
+5. Ortografia, abreviações e pequenas imprecisões de redação não devem reduzir a nota quando o conceito estiver correto.
+6. Considere equivalentes variações de acento, caixa, pontuação e abreviações anatômicas comuns quando o conceito for o mesmo.
+7. Se a resposta estiver em branco, classifique como sem_resposta e nota 0.
+8. Se a transcrição estiver ilegível, classifique como ilegivel.
+9. Se reading_confidence for baixa, marque needs_human_review como true.
+10. O comentário deve explicar de forma objetiva por que a resposta ficou naquele nível da régua.
 11. Retorne SOMENTE JSON válido.
 12. Não use markdown.
 13. Não use bloco ```json.
@@ -54,7 +70,12 @@ Regras obrigatórias:
 15. Use aspas duplas em todas as chaves.
 16. Use ponto decimal, nunca vírgula decimal.
 17. A nota deve ser exatamente um destes valores: 0, 0.25, 0.5, 0.75, 1.
-18. Comentário curto e objetivo.
+
+Calibração (generalize o raciocínio; não se limite a estes textos):
+- Núcleo correto, mesmo com redação diferente do gabarito (ex.: "entre as artérias cerebrais anteriores no polígono de Willis"): nota 1.0 ou 0.75. Nunca 0 nem 0.25.
+- Só o território geral, sem o detalhe essencial (ex.: "localizada no polígono de Willis"): crédito parcial (0.5 ou 0.25), nunca 0.
+- Conceito parcialmente correto + um erro anatômico relevante: crédito proporcional (em geral 0.5). Não zere automaticamente.
+- Resposta totalmente incompatível com a pergunta: 0.
 
 Formato JSON obrigatório (use exatamente estas chaves):
 {
@@ -326,7 +347,8 @@ def _build_prompt(question: dict, rubric: dict, student_answer: str, reading_con
         "rubric": rubric or {},
     }
     return (
-        "Corrija a resposta abaixo e retorne SOMENTE o JSON solicitado, curto e válido.\n\n"
+        "Corrija a resposta abaixo por conceito, não por similaridade lexical com o gabarito. "
+        "Retorne SOMENTE o JSON solicitado, curto e válido.\n\n"
         + json.dumps(payload, ensure_ascii=False, indent=2)
     )
 
