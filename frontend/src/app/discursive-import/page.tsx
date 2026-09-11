@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import axios from "axios";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Download, FileSearch, Loader2, Save } from "lucide-react";
@@ -19,6 +19,10 @@ type DetectResponse = {
   warnings: string[];
   requires_confirmation: boolean;
   canonical_pdf_data_url?: string;
+  template_repeat?: boolean;
+  template_page_count?: number;
+  source_page_count?: number;
+  detected_copy_count?: number;
 };
 
 type ConfirmResponse = {
@@ -48,6 +52,8 @@ export default function DiscursiveImportPage() {
   const [detecting, setDetecting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [confirmError, setConfirmError] = useState("");
+  const confirmErrorRef = useRef<HTMLDivElement>(null);
   const [detected, setDetected] = useState<DetectResponse | null>(null);
   const [title, setTitle] = useState("");
   const [questions, setQuestions] = useState<DiscursiveLayoutQuestion[]>([]);
@@ -62,11 +68,14 @@ export default function DiscursiveImportPage() {
 
     setDetecting(true);
     setError("");
+    setConfirmError("");
     setSaved(null);
     try {
       const body = new FormData();
       body.append("file", file);
-      const { data } = await uploadApi.post<DetectResponse>("/discursive-import/detect", body);
+      const { data } = await uploadApi.post<DetectResponse>("/discursive-import/detect", body, {
+        timeout: 180000,
+      });
       setDetected(data);
       setTitle(data.suggested_title || "Prova discursiva externa");
       setQuestions(data.questions || []);
@@ -79,19 +88,28 @@ export default function DiscursiveImportPage() {
     }
   };
 
+  const showConfirmError = (message: string) => {
+    setError(message);
+    setConfirmError(message);
+    requestAnimationFrame(() => {
+      confirmErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
+
   const confirmLayout = async () => {
     if (!detected) return;
     if (!title.trim()) {
-      setError("Informe um nome para a prova.");
+      showConfirmError("Informe um nome para a prova.");
       return;
     }
     if (!questions.length) {
-      setError("Adicione ao menos uma questão e marque sua área de resposta.");
+      showConfirmError("Adicione ao menos uma questão e marque sua área de resposta.");
       return;
     }
 
     setSaving(true);
     setError("");
+    setConfirmError("");
     try {
       const payload = {
         title: title.trim(),
@@ -109,8 +127,9 @@ export default function DiscursiveImportPage() {
       };
       const { data } = await uploadApi.post<ConfirmResponse>("/discursive-import/confirm", payload);
       setSaved(data);
+      setConfirmError("");
     } catch (err) {
-      setError(apiMessage(err, "Não foi possível salvar o layout confirmado."));
+      showConfirmError(apiMessage(err, "Não foi possível salvar o layout confirmado."));
     } finally {
       setSaving(false);
     }
@@ -153,6 +172,7 @@ export default function DiscursiveImportPage() {
               setDetected(null);
               setSaved(null);
               setError("");
+              setConfirmError("");
             }}
             className="block w-full text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-emerald-50 file:px-4 file:py-2 file:font-medium file:text-emerald-700 hover:file:bg-emerald-100"
           />
@@ -188,7 +208,24 @@ export default function DiscursiveImportPage() {
                 />
               </label>
               <div className="text-sm text-slate-600">
-                <strong>{questions.length}</strong> questão(ões) em <strong>{detected.pages.length}</strong> página(s)
+                <strong>{questions.length}</strong> questão(ões) no template
+                {detected.template_page_count ? (
+                  <>
+                    {" "}
+                    de <strong>{detected.template_page_count}</strong> página(s)
+                  </>
+                ) : (
+                  <>
+                    {" "}
+                    em <strong>{detected.pages.length}</strong> página(s)
+                  </>
+                )}
+                {(detected.detected_copy_count || 0) > 1 ? (
+                  <>
+                    {" "}
+                    · <strong>{detected.detected_copy_count}</strong> provas no PDF
+                  </>
+                ) : null}
               </div>
             </div>
 
@@ -221,12 +258,29 @@ export default function DiscursiveImportPage() {
             ) : null}
           </section>
 
-          <DiscursiveLayoutEditor pages={detected.pages} questions={questions} onChange={setQuestions} />
+          <div className="pb-36">
+            <DiscursiveLayoutEditor
+              pages={detected.pages}
+              questions={questions}
+              onChange={setQuestions}
+              copyCount={detected.detected_copy_count || 0}
+            />
+          </div>
 
-          <section className="glass-panel sticky bottom-4 z-20 flex flex-col gap-3 rounded-xl p-4 shadow-lg md:flex-row md:items-center md:justify-between">
-            <div className="text-sm text-slate-600">
-              Confirme que cada caixa verde/âmbar cobre apenas o espaço em que o aluno escreverá.
-            </div>
+          <section
+            ref={confirmErrorRef}
+            className="glass-panel sticky bottom-4 z-20 flex flex-col gap-3 rounded-xl p-4 shadow-lg md:flex-row md:items-center md:justify-between"
+          >
+            {confirmError ? (
+              <div className="flex items-start gap-2 text-sm text-rose-800">
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                <span>{confirmError}</span>
+              </div>
+            ) : (
+              <div className="text-sm text-slate-600">
+                Confirme que cada caixa verde/âmbar cobre apenas o espaço em que o aluno escreverá. O gabarito vale para todas as cópias da turma.
+              </div>
+            )}
             <button
               type="button"
               onClick={confirmLayout}

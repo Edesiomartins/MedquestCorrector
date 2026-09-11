@@ -24,6 +24,7 @@ export type DiscursiveLayoutQuestion = {
   expected_answer?: string;
   correction_criteria?: string | null;
   max_score?: number;
+  occurrence_count?: number;
 };
 
 type DragState = {
@@ -40,6 +41,7 @@ type Props = {
   pages: DiscursiveLayoutPage[];
   questions: DiscursiveLayoutQuestion[];
   onChange: (questions: DiscursiveLayoutQuestion[]) => void;
+  copyCount?: number;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -54,7 +56,79 @@ function provenanceLabel(value?: string | null) {
   return value || "detecção automática";
 }
 
-export default function DiscursiveLayoutEditor({ pages, questions, onChange }: Props) {
+function EmptyPageComposer({
+  suggestedNumber,
+  onCreate,
+}: {
+  suggestedNumber: number;
+  onCreate: (draft: { question_number: number; question_text: string; expected_answer: string }) => void;
+}) {
+  const [questionNumber, setQuestionNumber] = useState(String(suggestedNumber));
+  const [questionText, setQuestionText] = useState("");
+  const [expectedAnswer, setExpectedAnswer] = useState("");
+
+  const submit = () => {
+    onCreate({
+      question_number: Number(questionNumber) || suggestedNumber,
+      question_text: questionText,
+      expected_answer: expectedAnswer,
+    });
+    setQuestionText("");
+    setExpectedAnswer("");
+    setQuestionNumber(String((Number(questionNumber) || suggestedNumber) + 1));
+  };
+
+  return (
+    <div className="space-y-2 rounded-lg border border-dashed border-amber-300 bg-amber-50 p-3">
+      <p className="text-sm text-amber-900">
+        Nenhuma questão foi detectada nesta página. Digite ou cole o enunciado abaixo e adicione a área de resposta.
+      </p>
+      <label className="block text-xs font-medium text-slate-600">
+        Número
+        <input
+          type="number"
+          min={1}
+          value={questionNumber}
+          onChange={(event) => setQuestionNumber(event.target.value)}
+          onPointerDown={(event) => event.stopPropagation()}
+          className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+        />
+      </label>
+      <label className="block text-xs font-medium text-slate-600">
+        Enunciado
+        <textarea
+          rows={5}
+          value={questionText}
+          onChange={(event) => setQuestionText(event.target.value)}
+          onPointerDown={(event) => event.stopPropagation()}
+          placeholder="Cole ou digite o enunciado da questão"
+          className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+        />
+      </label>
+      <label className="block text-xs font-medium text-slate-600">
+        Resposta esperada
+        <textarea
+          rows={3}
+          value={expectedAnswer}
+          onChange={(event) => setExpectedAnswer(event.target.value)}
+          onPointerDown={(event) => event.stopPropagation()}
+          placeholder="Opcional agora; pode completar depois"
+          className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+        />
+      </label>
+      <button
+        type="button"
+        onClick={submit}
+        className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+      >
+        <Plus className="h-4 w-4" />
+        Adicionar questão nesta página
+      </button>
+    </div>
+  );
+}
+
+export default function DiscursiveLayoutEditor({ pages, questions, onChange, copyCount = 0 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(questions.length ? 0 : null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -108,15 +182,18 @@ export default function DiscursiveLayoutEditor({ pages, questions, onChange }: P
 
   const usedNumbers = useMemo(() => new Set(questions.map((item) => item.question_number)), [questions]);
 
-  const addQuestion = (page: DiscursiveLayoutPage) => {
+  const addQuestion = (
+    page: DiscursiveLayoutPage,
+    draft?: Partial<DiscursiveLayoutQuestion>,
+  ) => {
     let nextNumber = Math.max(0, ...questions.map((item) => item.question_number)) + 1;
     while (usedNumbers.has(nextNumber)) nextNumber += 1;
     const width = Math.max(80, page.width_pt - 84);
-    const height = Math.min(130, Math.max(70, page.height_pt * 0.18));
+    const height = Math.min(220, Math.max(90, page.height_pt * 0.28));
     const item: DiscursiveLayoutQuestion = {
       question_number: nextNumber,
       page_index: page.page_index,
-      question_text: `Questão ${nextNumber}`,
+      question_text: "",
       x_pt: 42,
       y_bottom_pt: 42,
       width_pt: Math.min(width, page.width_pt - 42),
@@ -126,7 +203,12 @@ export default function DiscursiveLayoutEditor({ pages, questions, onChange }: P
       expected_answer: "",
       correction_criteria: "",
       max_score: 1,
+      ...draft,
+      page_index: page.page_index,
     };
+    if (!item.question_number || item.question_number <= 0) {
+      item.question_number = nextNumber;
+    }
     const next = [...questions, item];
     onChange(next);
     setSelectedIndex(next.length - 1);
@@ -248,9 +330,10 @@ export default function DiscursiveLayoutEditor({ pages, questions, onChange }: P
               </div>
 
               {pageQuestions.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
-                  Nenhuma questão foi detectada nesta página. Adicione a área manualmente.
-                </div>
+                <EmptyPageComposer
+                  suggestedNumber={Math.max(0, ...questions.map((item) => item.question_number)) + 1}
+                  onCreate={(draft) => addQuestion(page, draft)}
+                />
               ) : (
                 pageQuestions.map(({ question, index }) => (
                   <div
@@ -281,12 +364,19 @@ export default function DiscursiveLayoutEditor({ pages, questions, onChange }: P
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
+                    {(question.occurrence_count || copyCount) > 1 ? (
+                      <p className="text-sm font-medium text-emerald-800">
+                        Q{question.question_number} · Detectada em {question.occurrence_count || copyCount} provas
+                      </p>
+                    ) : null}
                     <label className="block text-xs font-medium text-slate-600">
                       Enunciado detectado
                       <textarea
                         rows={4}
                         value={question.question_text}
                         onChange={(event) => updateQuestion(index, { question_text: event.target.value })}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        placeholder="Cole ou digite o enunciado da questão"
                         className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
                       />
                     </label>
@@ -296,6 +386,8 @@ export default function DiscursiveLayoutEditor({ pages, questions, onChange }: P
                         rows={3}
                         value={question.expected_answer || ""}
                         onChange={(event) => updateQuestion(index, { expected_answer: event.target.value })}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        placeholder="Cole ou digite a resposta esperada"
                         className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
                       />
                     </label>
@@ -326,6 +418,9 @@ export default function DiscursiveLayoutEditor({ pages, questions, onChange }: P
                     </label>
                     <div className="flex flex-wrap gap-2 text-xs text-slate-500">
                       <span>{provenanceLabel(question.provenance)}</span>
+                      {(question.occurrence_count || copyCount) > 1 ? (
+                        <span>• detectada em {question.occurrence_count || copyCount} provas</span>
+                      ) : null}
                       {question.confidence != null ? <span>• confiança {Math.round(question.confidence * 100)}%</span> : null}
                       {question.answer_line_count ? <span>• {question.answer_line_count} linhas</span> : null}
                     </div>

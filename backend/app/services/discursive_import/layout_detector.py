@@ -21,12 +21,18 @@ from app.services.openrouter_vision_client import (
     detect_discursive_page_layout,
 )
 
-QUESTION_RE = re.compile(r"^\s*(?:questao|q)\s*0*(\d{1,4})\b", re.IGNORECASE)
+QUESTION_RE = re.compile(
+    r"(?:questao|q)[\.\:\)]?\s*(?:n[oº°\.]+)?\s*0*(\d{1,4})\b",
+    re.IGNORECASE,
+)
+QUESTION_PREFIX_RE = re.compile(r"^[\d\.\)\:\-\–\—nº°o\s]*$", re.IGNORECASE)
 LINE_CHAR_RE = re.compile(r"^[\s_\.\-–—]+$")
 MIN_VECTOR_LINE_WIDTH_FRAC = 0.32
 PREVIEW_DPI = 110
 LAYOUT_VISION_DPI = 220
 MIN_PAGE_TEXT_CHARS = 12
+MAX_TEMPLATE_PAGES = 20
+LAYOUT_REPEAT_TOLERANCE = 0.15
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +52,12 @@ def _ascii_fold(value: str) -> str:
 
 
 def _question_number(text: str) -> int | None:
-    match = QUESTION_RE.search(_ascii_fold(text))
+    folded = _ascii_fold(text or "").strip()
+    match = QUESTION_RE.search(folded)
     if not match:
+        return None
+    prefix = folded[: match.start()]
+    if prefix and not QUESTION_PREFIX_RE.fullmatch(prefix):
         return None
     value = int(match.group(1))
     return value if value > 0 else None
@@ -284,13 +294,26 @@ def _vision_questions_for_page(
         try:
             qnum = int(raw_number)
         except (TypeError, ValueError):
-            continue
+            qnum = _question_number(str(raw_number or "")) or _question_number(
+                str(item.get("question_text") or item.get("prompt") or item.get("prompt_detected") or "")
+            )
+            if qnum is None:
+                continue
         if qnum <= 0:
             continue
         box = _box_from_vision_item(item, page_width, page_height)
         if box is None:
-            warnings.append(f"Q{qnum} na página {page_index + 1}: geometria visual inválida.")
-            continue
+            warnings.append(
+                f"Q{qnum} na página {page_index + 1}: geometria visual incompleta; área padrão sugerida."
+            )
+            box = _clamp_answer_box(
+                36.0,
+                36.0,
+                max(80.0, page_width - 72.0),
+                max(120.0, page_height * 0.42),
+                page_width,
+                page_height,
+            )
         x_pt, y_bottom_pt, width_pt, height_pt = box
         question_text = str(
             item.get("question_text") or item.get("prompt") or item.get("prompt_detected") or ""
@@ -315,6 +338,11 @@ def _vision_questions_for_page(
     if questions:
         warnings.append(
             f"Página {page_index + 1}: layout detectado visualmente (scan). Confirme as áreas de resposta."
+        )
+    else:
+        warnings.append(
+            f"Página {page_index + 1}: a detecção visual não encontrou questões. "
+            "Digite ou cole o enunciado e adicione a área manualmente."
         )
     return questions
 
@@ -382,59 +410,221 @@ def _structural_questions_for_page(
     return questions
 
 
+def _normalized_box(item: dict[str, Any], page_width: float, page_height: float) -> tuple[int, float, float, float, float]:
+    pw = max(float(page_width), 1.0)
+    ph = max(float(page_height), 1.0)
+    return (
+        int(item["question_number"]),
+        float(item.get("x_pt") or 0.0) / pw,
+        float(item.get("y_bottom_pt") or 0.0) / ph,
+        float(item.get("width_pt") or 0.0) / pw,
+        float(item.get("height_pt") or 0.0) / ph,
+    )
+
+
+def _page_layout_signature(
+    questions: list[dict[str, Any]], page_width: float, page_height: float
+) -> tuple[tuple[int, float, float, float, float], ...]:
+    keys = [_normalized_box(item, page_width, page_height) for item in questions]
+    return tuple(sorted(keys, key=lambda item: (item[0], item[1], item[2])))
+
+
+def _signatures_match(
+    left: tuple[tuple[int, float, float, float, float], ...],
+    right: tuple[tuple[int, float, float, float, float], ...],
+    *,
+    tolerance: float = LAYOUT_REPEAT_TOLERANCE,
+) -> bool:
+    if len(left) != len(right):
+        return False
+    for first, second in zip(left, right):
+        if first[0] != second[0]:
+            return False
+        if any(abs(first[index] - second[index]) > tolerance for index in range(1, 5)):
+            return False
+    return True
+
+
+def infer_template_page_count(pages: list[dict[str, Any]], questions: list[dict[str, Any]]) -> int:
+    if not pages:
+        return 0
+    page_map = {int(page["page_index"]): page for page in pages}
+    ordered = sorted(page_map)
+    by_page: dict[int, list[dict[str, Any]]] = {index: [] for index in ordered}
+    for item in questions:
+        try:
+            page_index = int(item.get("page_index"))
+        except (TypeError, ValueError):
+            continue
+        if page_index in by_page:
+            by_page[page_index].append(item)
+    signatures: list[tuple[tuple[int, float, float, float, float], ...]] = []
+    for page_index in ordered:
+        page = page_map[page_index]
+        signature = _page_layout_signature(
+            by_page[page_index],
+            float(page.get("width_pt") or 1.0),
+            float(page.get("height_pt") or 1.0),
+        )
+        if signatures and signature and _signatures_match(signature, signatures[0]):
+            return len(signatures)
+        signatures.append(signature)
+    return len(ordered)
+
+
+def consolidate_repeated_template(
+    pages: list[dict[str, Any]],
+    questions: list[dict[str, Any]],
+    *,
+    source_page_count: int | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    source = int(source_page_count) if source_page_count is not None else len(pages)
+    cycle = infer_template_page_count(pages, questions)
+    if cycle <= 0:
+        meta = {
+            "template_repeat": True,
+            "template_page_count": 0,
+            "source_page_count": source,
+            "detected_copy_count": 0,
+        }
+        return pages, questions, meta
+
+    ordered_pages = sorted(pages, key=lambda page: int(page["page_index"]))
+    template_pages = ordered_pages[:cycle]
+    index_map = {int(page["page_index"]): new_index for new_index, page in enumerate(template_pages)}
+    new_pages = []
+    for new_index, page in enumerate(template_pages):
+        item = dict(page)
+        item["page_index"] = new_index
+        new_pages.append(item)
+
+    new_questions: list[dict[str, Any]] = []
+    for question in questions:
+        try:
+            old_index = int(question.get("page_index"))
+        except (TypeError, ValueError):
+            continue
+        if old_index not in index_map:
+            continue
+        item = dict(question)
+        item["page_index"] = index_map[old_index]
+        new_questions.append(item)
+
+    copies = source // cycle if cycle else 0
+    for question in new_questions:
+        question["occurrence_count"] = copies
+    meta = {
+        "template_repeat": True,
+        "template_page_count": cycle,
+        "source_page_count": source,
+        "detected_copy_count": copies,
+    }
+    return new_pages, new_questions, meta
+
+
+def _detect_page_questions(
+    page: fitz.Page,
+    *,
+    page_index: int,
+    width: float,
+    height: float,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    seen_numbers: set[int] = set()
+    lines = _text_lines(page)
+    page_questions = _structural_questions_for_page(
+        page,
+        page_index=page_index,
+        width=width,
+        height=height,
+        lines=lines,
+        seen_numbers=seen_numbers,
+        warnings=warnings,
+    )
+    needs_vision = (not _page_has_sufficient_text(page, lines)) or (not page_questions)
+    if not needs_vision:
+        return page_questions
+
+    previous = page_questions
+    vision_seen: set[int] = set()
+    vision_questions = _vision_questions_for_page(
+        page,
+        page_index=page_index,
+        page_width=width,
+        page_height=height,
+        seen_numbers=vision_seen,
+        warnings=warnings,
+    )
+    if vision_questions:
+        return vision_questions
+    return previous
+
+
 def detect_pdf_layout(raw_pdf: bytes) -> dict[str, Any]:
     if not raw_pdf:
         raise ValueError("PDF vazio.")
     doc = fitz.open(stream=raw_pdf, filetype="pdf")
     try:
+        source_page_count = doc.page_count
         pages: list[dict[str, Any]] = []
         questions: list[dict[str, Any]] = []
         warnings: list[str] = []
-        seen_numbers: set[int] = set()
+        signatures: list[tuple[tuple[int, float, float, float, float], ...]] = []
 
-        for page_index in range(doc.page_count):
+        for page_index in range(source_page_count):
+            if len(pages) >= MAX_TEMPLATE_PAGES:
+                warnings.append(
+                    f"A detecção do template parou nas primeiras {MAX_TEMPLATE_PAGES} páginas."
+                )
+                break
+
             page = doc.load_page(page_index)
             width, height = float(page.rect.width), float(page.rect.height)
+            page_warnings: list[str] = []
+            page_questions = _detect_page_questions(
+                page,
+                page_index=page_index,
+                width=width,
+                height=height,
+                warnings=page_warnings,
+            )
+            signature = _page_layout_signature(page_questions, width, height)
+            if signatures and signature and _signatures_match(signature, signatures[0]):
+                warnings.append(
+                    f"Layout repetido a cada {len(signatures)} página(s). "
+                    "As demais páginas foram tratadas como cópias da turma."
+                )
+                break
+
+            signatures.append(signature)
+            warnings.extend(page_warnings)
+            template_index = len(pages)
+            for item in page_questions:
+                item["page_index"] = template_index
             pages.append(
                 {
-                    "page_index": page_index,
+                    "page_index": template_index,
                     "width_pt": width,
                     "height_pt": height,
                     "preview_data_url": _page_preview_data_url(page),
                 }
             )
-
-            lines = _text_lines(page)
-            page_questions = _structural_questions_for_page(
-                page,
-                page_index=page_index,
-                width=width,
-                height=height,
-                lines=lines,
-                seen_numbers=seen_numbers,
-                warnings=warnings,
-            )
-            needs_vision = (not _page_has_sufficient_text(page, lines)) or (not page_questions)
-            if needs_vision:
-                previous = page_questions
-                for item in previous:
-                    seen_numbers.discard(int(item["question_number"]))
-                vision_questions = _vision_questions_for_page(
-                    page,
-                    page_index=page_index,
-                    page_width=width,
-                    page_height=height,
-                    seen_numbers=seen_numbers,
-                    warnings=warnings,
-                )
-                if vision_questions:
-                    page_questions = vision_questions
-                else:
-                    for item in previous:
-                        seen_numbers.add(int(item["question_number"]))
-                    page_questions = previous
             questions.extend(page_questions)
 
+        cycle = len(pages)
+        copies = source_page_count // cycle if cycle else 0
+        remainder = source_page_count % cycle if cycle else 0
+        for item in questions:
+            item["occurrence_count"] = copies
+        if copies > 1:
+            warnings.append(
+                f"Detectamos {copies} prova(s) de {cycle} página(s). "
+                "Cadastre resposta esperada, critérios e valor uma única vez."
+            )
+        if remainder:
+            warnings.append(
+                f"O PDF tem {source_page_count} páginas; {remainder} página(s) ficaram fora do ciclo de {cycle}."
+            )
         if not questions:
             warnings.append("Nenhuma questão discursiva foi detectada automaticamente.")
         return {
@@ -442,6 +632,10 @@ def detect_pdf_layout(raw_pdf: bytes) -> dict[str, Any]:
             "pages": pages,
             "questions": questions,
             "warnings": warnings,
+            "template_repeat": True,
+            "template_page_count": cycle,
+            "source_page_count": source_page_count,
+            "detected_copy_count": copies,
         }
     finally:
         doc.close()

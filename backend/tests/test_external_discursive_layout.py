@@ -139,6 +139,34 @@ def test_multiple_pages_preserve_page_indexes():
     assert len(result['pages']) == 2
 
 
+def test_question_labels_ignore_header_and_inline_mentions():
+    from app.services.discursive_import.layout_detector import _question_number
+
+    assert _question_number("QUESTÕES DISCURSIVAS") is None
+    assert _question_number("Enunciado da questão 38.") is None
+    assert _question_number("Questão 38") == 38
+    assert _question_number("QUESTÃO 39") == 39
+    assert _question_number("Q 7") == 7
+    assert _question_number("1. Questão 35") == 35
+
+
+def test_discursive_header_page_does_not_invent_a_question(monkeypatch):
+    from app.services.discursive_import import layout_detector as detector
+
+    monkeypatch.setattr(detector, "detect_discursive_page_layout", lambda *a, **k: {"questions": []})
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(42, h - 70, "QUESTÕES DISCURSIVAS")
+    c.setFont("Helvetica", 10)
+    c.drawString(42, h - 92, "Nome do aluno(a): ________________")
+    c.save()
+    result = detect_pdf_layout(buf.getvalue())
+    assert result["questions"] == []
+    assert any("nenhuma questão discursiva" in item.lower() for item in result["warnings"])
+
+
 def test_overlap_is_warning_not_error():
     pages = [{'page_index': 0, 'width_pt': 595.0, 'height_pt': 842.0}]
     questions = [
@@ -235,6 +263,29 @@ def test_scanned_pdf_without_text_uses_visual_fallback(monkeypatch):
     assert q["y_bottom_pt"] + q["height_pt"] <= 850
 
 
+def test_vision_question_without_box_still_gets_a_default_area(monkeypatch):
+    from app.services.discursive_import import layout_detector as detector
+
+    monkeypatch.setattr(
+        detector,
+        "detect_discursive_page_layout",
+        lambda *a, **k: {
+            "questions": [
+                {
+                    "question_text": "Questão 35 Explique a diferença morfológica fundamental.",
+                }
+            ]
+        },
+    )
+    result = detect_pdf_layout(_rasterized_pdf(_pdf_with_lined_question(35)))
+    assert [q["question_number"] for q in result["questions"]] == [35]
+    q = result["questions"][0]
+    assert q["provenance"] == "vision_scan"
+    assert q["width_pt"] > 80
+    assert q["height_pt"] > 80
+    assert "diferença morfológica" in q["question_text"].lower()
+
+
 def test_layout_vision_prompt_is_blind_to_answer_key():
     from app.services.openrouter_vision_client import LAYOUT_DETECTION_PROMPT
 
@@ -271,3 +322,201 @@ def test_layout_detection_reuses_existing_openrouter_client(monkeypatch, tmp_pat
     assert "correction_criteria" not in captured
     assert out["questions"][0]["number"] == 35
     assert out["model_used"] == "vision-mock"
+
+
+def _pdf_pages_with_questions(numbers: list[int]) -> bytes:
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+    for index, number in enumerate(numbers):
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(42, h - 70, f"Questão {number}")
+        c.setFont("Helvetica", 10)
+        c.drawString(42, h - 92, f"Enunciado da questão {number}.")
+        y = h - 145
+        for _ in range(5):
+            c.line(42, y, w - 42, y)
+            y -= 24
+        if index < len(numbers) - 1:
+            c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def _rasterized_repeated_first_page(source_pdf: bytes, n_pages: int) -> bytes:
+    import pymupdf as fitz
+
+    src = fitz.open(stream=source_pdf, filetype="pdf")
+    out = fitz.open()
+    try:
+        pix = src[0].get_pixmap(matrix=fitz.Matrix(150 / 72, 150 / 72), alpha=False)
+        for _ in range(n_pages):
+            new_page = out.new_page(width=src[0].rect.width, height=src[0].rect.height)
+            new_page.insert_image(new_page.rect, pixmap=pix)
+        return out.tobytes()
+    finally:
+        src.close()
+        out.close()
+
+
+def test_scanned_repeated_q35_copies_collapse_to_one_logical_question(monkeypatch):
+    from app.services.discursive_import import layout_detector as detector
+
+    calls = []
+
+    def fake_layout(*a, **k):
+        calls.append(1)
+        return {
+            "questions": [
+                {
+                    "number": 35,
+                    "question_text": "Explique a diferença morfológica.",
+                    "x": 0.07,
+                    "y": 0.22,
+                    "width": 0.86,
+                    "height": 0.45,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(detector, "detect_discursive_page_layout", fake_layout)
+    result = detect_pdf_layout(_rasterized_repeated_first_page(_pdf_with_lined_question(35), 5))
+
+    assert [q["question_number"] for q in result["questions"]] == [35]
+    assert len(result["pages"]) == 1
+    assert result["template_repeat"] is True
+    assert result["template_page_count"] == 1
+    assert result["source_page_count"] == 5
+    assert result["detected_copy_count"] == 5
+    assert result["questions"][0]["occurrence_count"] == 5
+    assert result["questions"][0]["page_index"] == 0
+    errors, _warnings = validate_confirmed_layout(result["pages"], result["questions"])
+    assert errors == []
+    manifest = build_template_manifest("exam-35", result["pages"], result["questions"])
+    assert manifest["template_repeat"] is True
+    assert manifest["template_page_count"] == 1
+
+
+def test_scanned_q35_q36_cycle_collapses_to_two_logical_questions(monkeypatch):
+    from app.services.discursive_import import layout_detector as detector
+
+    calls = []
+    sequence = [35, 36, 35, 36, 35, 36]
+
+    def fake_layout(*a, **k):
+        number = sequence[len(calls)]
+        calls.append(number)
+        return {
+            "questions": [
+                {
+                    "number": number,
+                    "question_text": f"Enunciado da questão {number}.",
+                    "x": 0.07,
+                    "y": 0.22,
+                    "width": 0.86,
+                    "height": 0.45,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(detector, "detect_discursive_page_layout", fake_layout)
+    raster = _rasterized_pdf(_pdf_pages_with_questions(sequence))
+    result = detect_pdf_layout(raster)
+
+    assert [q["question_number"] for q in result["questions"]] == [35, 36]
+    assert [q["page_index"] for q in result["questions"]] == [0, 1]
+    assert result["template_page_count"] == 2
+    assert result["template_repeat"] is True
+    assert result["source_page_count"] == 6
+    assert result["detected_copy_count"] == 3
+    assert {q["question_number"]: q["occurrence_count"] for q in result["questions"]} == {35: 3, 36: 3}
+    errors, _warnings = validate_confirmed_layout(result["pages"], result["questions"])
+    assert errors == []
+
+
+def test_vision_stops_after_repeated_template_is_identified(monkeypatch):
+    from app.services.discursive_import import layout_detector as detector
+
+    calls = []
+    monkeypatch.setattr(
+        detector,
+        "detect_discursive_page_layout",
+        lambda *a, **k: calls.append(1)
+        or {
+            "questions": [
+                {
+                    "number": 35,
+                    "question_text": "Q35",
+                    "x": 0.1,
+                    "y": 0.2,
+                    "width": 0.8,
+                    "height": 0.4,
+                }
+            ]
+        },
+    )
+    result = detect_pdf_layout(_rasterized_repeated_first_page(_pdf_with_lined_question(35), 105))
+    assert result["template_page_count"] == 1
+    assert result["detected_copy_count"] == 105
+    assert [q["question_number"] for q in result["questions"]] == [35]
+    assert len(calls) == 2
+
+
+def test_confirm_payload_with_repeated_copies_is_consolidated_before_validation():
+    from app.services.discursive_import.layout_detector import consolidate_repeated_template
+
+    pages = [{"page_index": index, "width_pt": 595.0, "height_pt": 842.0} for index in range(5)]
+    questions = [
+        {
+            "question_number": 35,
+            "page_index": index,
+            "question_text": "Explique.",
+            "x_pt": 40,
+            "y_bottom_pt": 40,
+            "width_pt": 500,
+            "height_pt": 200,
+            "expected_answer": "resposta única" if index == 0 else "",
+            "correction_criteria": "critério único" if index == 0 else "",
+            "max_score": 2.0 if index == 0 else 1.0,
+        }
+        for index in range(5)
+    ]
+    pages, questions, meta = consolidate_repeated_template(pages, questions, source_page_count=5)
+    assert meta["template_page_count"] == 1
+    assert meta["detected_copy_count"] == 5
+    assert len(questions) == 1
+    assert questions[0]["question_number"] == 35
+    assert questions[0]["expected_answer"] == "resposta única"
+    assert questions[0]["correction_criteria"] == "critério único"
+    assert questions[0]["max_score"] == 2.0
+    errors, _warnings = validate_confirmed_layout(pages, questions)
+    assert errors == []
+
+
+def test_real_duplicate_inside_template_is_still_rejected():
+    pages = [
+        {"page_index": 0, "width_pt": 595.0, "height_pt": 842.0},
+        {"page_index": 1, "width_pt": 595.0, "height_pt": 842.0},
+    ]
+    questions = [
+        {
+            "question_number": 35,
+            "page_index": 0,
+            "question_text": "A",
+            "x_pt": 20,
+            "y_bottom_pt": 400,
+            "width_pt": 200,
+            "height_pt": 100,
+        },
+        {
+            "question_number": 35,
+            "page_index": 1,
+            "question_text": "B",
+            "x_pt": 20,
+            "y_bottom_pt": 40,
+            "width_pt": 200,
+            "height_pt": 100,
+        },
+    ]
+    errors, _warnings = validate_confirmed_layout(pages, questions)
+    assert any("duplicado" in item.lower() for item in errors)

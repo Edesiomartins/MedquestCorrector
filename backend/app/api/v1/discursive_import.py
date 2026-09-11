@@ -16,6 +16,7 @@ from app.models.exam import Exam, ExamQuestion
 from app.services.discursive_import.canonical_pdf import add_student_identity_header
 from app.services.discursive_import.layout_detector import (
     build_template_manifest,
+    consolidate_repeated_template,
     detect_pdf_layout,
     normalize_docx_to_pdf,
     validate_confirmed_layout,
@@ -112,7 +113,7 @@ async def detect_external_discursive_layout(file: UploadFile = File(...)):
             detected = detect_pdf_layout(raw)
 
         if len(detected.get("pages") or []) > MAX_IMPORT_PAGES:
-            raise ValueError(f"A importação aceita até {MAX_IMPORT_PAGES} páginas por prova discursiva.")
+            raise ValueError(f"A importação aceita até {MAX_IMPORT_PAGES} páginas no template da prova discursiva.")
 
         warnings = [*extra_warnings, *(detected.get("warnings") or [])]
         response = {
@@ -123,6 +124,10 @@ async def detect_external_discursive_layout(file: UploadFile = File(...)):
             "questions": detected.get("questions") or [],
             "warnings": warnings,
             "requires_confirmation": True,
+            "template_repeat": bool(detected.get("template_repeat", True)),
+            "template_page_count": int(detected.get("template_page_count") or len(detected.get("pages") or [])),
+            "source_page_count": int(detected.get("source_page_count") or len(detected.get("pages") or [])),
+            "detected_copy_count": int(detected.get("detected_copy_count") or 0),
         }
         if canonical_pdf is not None:
             response["canonical_pdf_data_url"] = (
@@ -153,6 +158,11 @@ def confirm_external_discursive_layout(payload: ConfirmLayoutIn, db: Session = D
 
     pages = [page.model_dump() for page in payload.pages]
     questions = [question.model_dump() for question in payload.questions]
+    pages, questions, meta = consolidate_repeated_template(
+        pages,
+        questions,
+        source_page_count=len(payload.pages),
+    )
     errors, warnings = validate_confirmed_layout(pages, questions)
     if errors:
         raise HTTPException(
@@ -214,7 +224,7 @@ def confirm_external_discursive_layout(payload: ConfirmLayoutIn, db: Session = D
         "exam_id": str(exam.id),
         "title": exam.name,
         "questions_created": len(questions),
-        "template_page_count": len(pages),
+        "template_page_count": meta["template_page_count"] or len(pages),
         "warnings": warnings,
         "next_step": "Revise a resposta esperada, critérios e valor de cada questão antes de corrigir os scans.",
     }
