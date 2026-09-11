@@ -59,6 +59,7 @@ def test_build_template_manifest_repeats_template_pages():
     manifest = build_template_manifest('exam-123', detected['pages'], detected['questions'])
     assert manifest['template_repeat'] is True
     assert manifest['template_page_count'] == 1
+    assert manifest['source'] == 'external_discursive'
     assert manifest['pages'][0]['boxes'][0]['question_number'] == 38
     assert manifest['pages'][0]['student_id'] == ''
 

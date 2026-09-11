@@ -18,6 +18,10 @@ from app.models.grading import QuestionScore, ResultStatus, StudentResult
 from app.models.pipeline import BatchStatus, UploadBatch
 from app.services.batch_results_cleanup import clear_batch_grading_results
 from app.services.vision.ink import InkStats, detect_ink
+from app.services.discursive_import.readiness import (
+    ExternalDiscursiveNotReadyError,
+    require_external_discursive_ready,
+)
 from app.services.grading.manual_review_decision import decide_manual_review
 from app.services.llm.grading import (
     QuestionSpec,
@@ -224,6 +228,12 @@ def process_upload_batch(self, batch_id: str):
         )
         if not questions:
             _fail(db, batch, f"[batch={batch_id}] Prova sem questões.")
+            return
+
+        try:
+            require_external_discursive_ready(exam, questions)
+        except ExternalDiscursiveNotReadyError as exc:
+            _fail(db, batch, str(exc))
             return
 
         question_by_number = {q.question_number: q for q in questions}
@@ -589,7 +599,12 @@ def process_upload_batch(self, batch_id: str):
                             exc,
                         )
                         crop_ref = None
-                    ink = detect_ink(crop)
+                    ink = detect_ink(
+                        crop,
+                        suppress_horizontal_guides=bool(
+                            manifest and getattr(manifest, "is_external_discursive", False)
+                        ),
+                    )
                     logger.warning(
                         "[question-crop] question_number=%s crop_box=%s crop_path=%s "
                         "crop_size=%sx%s ink=%s ratio=%.5f",

@@ -92,6 +92,21 @@ async def analyze_discursive_pdf(
                 stage="grading",
             )
 
+        from app.services.discursive_import.readiness import (
+            ExternalDiscursiveNotReadyError,
+            require_external_discursive_ready,
+        )
+
+        try:
+            require_external_discursive_ready(exam, questions)
+        except ExternalDiscursiveNotReadyError as exc:
+            raise KnownPipelineError(
+                code="EXTERNAL_DISCURSIVE_GABARITO_INCOMPLETE",
+                user_message=str(exc),
+                detail=str(exc),
+                stage="grading",
+            ) from exc
+
         rubric_payload = {
             "exam_id": str(exam.id),
             "exam_name": exam.name,

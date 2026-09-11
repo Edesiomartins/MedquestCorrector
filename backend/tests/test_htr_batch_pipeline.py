@@ -96,7 +96,7 @@ def _install_crop_prep(monkeypatch, blank_numbers: set[int] | None = None):
         current["number"] = box.question_number
         return Image.new("RGB", (80, 40), (30, 30, 30))
 
-    def fake_ink(_image):
+    def fake_ink(_image, suppress_horizontal_guides=False, **_kwargs):
         return _ink(has_ink=current["number"] not in blank_numbers)
 
     monkeypatch.setattr(vep, "render_pdf_box", fake_render)
@@ -426,4 +426,46 @@ def test_htr_v2_run_summary_log(monkeypatch, tmp_path, caplog):
     assert "pages=1" in run_lines[0]
     assert "elapsed=" in run_lines[0]
     assert "sk-" not in run_lines[0]
+
+
+def test_external_discursive_manifest_suppresses_horizontal_guides(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    captured = {}
+    monkeypatch.setattr(vep.settings, "HTR_BATCH_PAGE_ENABLED", False)
+
+    def fake_crops(**kwargs):
+        captured.update(kwargs)
+        return _v1_page(kwargs["physical_page_number"])
+
+    monkeypatch.setattr(vep, "_read_page_by_crops", fake_crops)
+    warnings = []
+    vep._read_page(
+        pdf_path=str(tmp_path / "sheet.pdf"),
+        page_image=_page_image(tmp_path),
+        page_index=0,
+        physical_page_number=1,
+        manifest=replace(_manifest([1]), source="external_discursive"),
+        options={},
+        rubric=None,
+        work_dir=tmp_path,
+        crop_dir=tmp_path / "crops",
+        warnings=warnings,
+    )
+    assert captured["suppress_horizontal_guides"] is True
+
+    captured.clear()
+    vep._read_page(
+        pdf_path=str(tmp_path / "sheet.pdf"),
+        page_image=_page_image(tmp_path),
+        page_index=0,
+        physical_page_number=1,
+        manifest=_manifest([1]),
+        options={},
+        rubric=None,
+        work_dir=tmp_path,
+        crop_dir=tmp_path / "crops",
+        warnings=warnings,
+    )
+    assert captured["suppress_horizontal_guides"] is False
 

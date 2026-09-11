@@ -122,6 +122,8 @@ export default function DiscursiveLayoutEditor({ pages, questions, onChange }: P
       height_pt: height,
       confidence: null,
       provenance: "manual",
+      expected_answer: "",
+      correction_criteria: "",
       max_score: 1,
     };
     const next = [...questions, item];
@@ -285,6 +287,40 @@ export default function DiscursiveLayoutEditor({ pages, questions, onChange }: P
                         value={question.question_text}
                         onChange={(event) => updateQuestion(index, { question_text: event.target.value })}
                         className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="block text-xs font-medium text-slate-600">
+                      Resposta esperada
+                      <textarea
+                        rows={3}
+                        value={question.expected_answer || ""}
+                        onChange={(event) => updateQuestion(index, { expected_answer: event.target.value })}
+                        className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                      />
+                    </label>
+                    {!(question.expected_answer || "").trim() ? (
+                      <p className="text-xs font-medium text-amber-700">Gabarito ainda não informado</p>
+                    ) : null}
+                    <label className="block text-xs font-medium text-slate-600">
+                      Critérios de correção
+                      <textarea
+                        rows={3}
+                        value={question.correction_criteria || ""}
+                        onChange={(event) => updateQuestion(index, { correction_criteria: event.target.value })}
+                        className="mt-1 w-full resize-y rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="block text-xs font-medium text-slate-600">
+                      Valor da questão
+                      <input
+                        type="number"
+                        min={0.1}
+                        step={0.1}
+                        value={question.max_score ?? 1}
+                        onChange={(event) =>
+                          updateQuestion(index, { max_score: Number(event.target.value) || 1 })
+                        }
+                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
                       />
                     </label>
                     <div className="flex flex-wrap gap-2 text-xs text-slate-500">

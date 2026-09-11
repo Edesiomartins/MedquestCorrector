@@ -236,6 +236,9 @@ def analyze_discursive_exam_pdf(
                             "expected_answer": str((question_rubric or {}).get("expected_answer") or ""),
                         }
                         text_model_used = text_model_used or str(options.get("text_model") or "")
+                        grade = _apply_discursive_review_flags(
+                            grade, question, is_practical=is_practical_exam
+                        )
                         page_questions.append(
                             {
                                 "physical_page": physical_page,
@@ -251,10 +254,15 @@ def analyze_discursive_exam_pdf(
                                 "ocr_confidence": question.get("ocr_confidence"),
                                 "reading_notes": question.get("reading_notes", ""),
                                 "has_answer": bool(question.get("has_answer", False)),
+                                "has_erasure": bool(question.get("has_erasure", False)),
+                                "erased_text": str(question.get("erased_text") or ""),
                                 "image_region": question.get("image_region"),
                                 "answer_crop_path": question.get("answer_crop_path"),
                                 "ink_ratio": question.get("ink_ratio"),
                                 "escalated": bool(question.get("escalated", False)),
+                                "escalation_model": question.get("escalation_model") or "",
+                                "escalation_failed": bool(question.get("escalation_failed", False)),
+                                "original_reading": question.get("original_reading"),
                                 "agreement_cer": question.get("agreement_cer"),
                                 "alternative_readings": question.get("alternative_readings") or [],
                                 "grade": _public_grade(grade),
@@ -297,6 +305,8 @@ def analyze_discursive_exam_pdf(
                 if question_rubric and not grade.get("expected_answer"):
                     grade["expected_answer"] = str((question_rubric or {}).get("expected_answer") or "")
 
+                grade = _apply_discursive_review_flags(grade, question, is_practical=is_practical_exam)
+
                 page_questions.append(
                     {
                         "physical_page": physical_page,
@@ -312,10 +322,15 @@ def analyze_discursive_exam_pdf(
                         "ocr_confidence": question.get("ocr_confidence"),
                         "reading_notes": question.get("reading_notes", ""),
                         "has_answer": bool(question.get("has_answer", False)),
+                        "has_erasure": bool(question.get("has_erasure", False)),
+                        "erased_text": str(question.get("erased_text") or ""),
                         "image_region": question.get("image_region"),
                         "answer_crop_path": question.get("answer_crop_path"),
                         "ink_ratio": question.get("ink_ratio"),
                         "escalated": bool(question.get("escalated", False)),
+                        "escalation_model": question.get("escalation_model") or "",
+                        "escalation_failed": bool(question.get("escalation_failed", False)),
+                        "original_reading": question.get("original_reading"),
                         "agreement_cer": question.get("agreement_cer"),
                         "alternative_readings": question.get("alternative_readings") or [],
                         "grade": _public_grade(grade),
@@ -519,6 +534,34 @@ def _public_grade(grade: dict) -> dict:
     }
 
 
+DISCURSIVE_ERASURE_REVIEW_REASON = (
+    "Resposta discursiva contém rasura; revisão do professor obrigatória."
+)
+
+
+def _append_review_reason(grade: dict, reason: str) -> dict:
+    existing = str(grade.get("review_reason") or "").strip()
+    if reason in existing:
+        return grade
+    grade["review_reason"] = " ".join(part for part in (existing, reason) if part).strip()
+    return grade
+
+
+def _apply_discursive_review_flags(grade: dict, question: dict, *, is_practical: bool) -> dict:
+    if is_practical:
+        return grade
+    if question.get("has_erasure"):
+        grade["needs_human_review"] = True
+        grade = _append_review_reason(grade, DISCURSIVE_ERASURE_REVIEW_REASON)
+    if question.get("escalation_failed"):
+        grade["needs_human_review"] = True
+        grade = _append_review_reason(
+            grade,
+            "Escalonamento seletivo de leitura falhou; revisão do professor obrigatória.",
+        )
+    return grade
+
+
 def _strip_internal_raw(students: list[dict]) -> list[dict]:
     clean_students = []
     for student in students:
@@ -651,6 +694,7 @@ def _read_page(
             options=options,
             crop_dir=crop_dir,
             warnings=warnings,
+            suppress_horizontal_guides=bool(getattr(manifest, "is_external_discursive", False)),
         )
         if bool(options.get("htr_batch_page_enabled", settings.HTR_BATCH_PAGE_ENABLED)):
             question_count = len(manifest_page.boxes)
@@ -742,6 +786,7 @@ def _read_page_by_crops(
     options: dict,
     crop_dir: Path,
     warnings: list[str],
+    suppress_horizontal_guides: bool = False,
 ) -> dict:
     """Uma chamada por questão, sobre o recorte da própria caixa de resposta.
 
@@ -772,7 +817,7 @@ def _read_page_by_crops(
             questions.append(_failed_reading_question(qnum, "", str(exc), None))
             continue
 
-        ink = detect_ink(crop)
+        ink = detect_ink(crop, suppress_horizontal_guides=suppress_horizontal_guides)
         crop_path = crop_dir / f"p{physical_page_number:03d}_q{qnum:02d}.png"
 
         if not ink.has_ink:
@@ -849,6 +894,7 @@ def _read_page_by_batch(
     options: dict,
     crop_dir: Path,
     warnings: list[str],
+    suppress_horizontal_guides: bool = False,
 ) -> dict:
     """Uma chamada multimodal por pagina: pagina contextual + contact sheets."""
     crop_dir.mkdir(parents=True, exist_ok=True)
@@ -869,7 +915,7 @@ def _read_page_by_batch(
             failed_questions.append(_failed_reading_question(qnum, "", str(exc), None))
             continue
 
-        ink = detect_ink(crop)
+        ink = detect_ink(crop, suppress_horizontal_guides=suppress_horizontal_guides)
         crop_path = crop_dir / f"p{physical_page_number:03d}_q{qnum:02d}.png"
 
         if not ink.has_ink:
@@ -971,6 +1017,12 @@ def _read_page_by_batch(
     questions.extend(blank_questions)
     questions.extend(failed_questions)
     questions.sort(key=lambda item: int(item.get("number") or 0))
+    questions = _maybe_selective_discursive_escalation(
+        questions,
+        options=options,
+        warnings=warnings,
+        physical_page_number=physical_page_number,
+    )
 
     student = _identify_page(
         page_image=page_image,
@@ -1005,6 +1057,8 @@ def _blank_answer_question(question_number: int, ink: Any, crop_path: str) -> di
         "answer_crop_path": crop_path,
         "ink_ratio": round(ink.ink_ratio, 5),
         "ink_marginal": bool(ink.is_marginal),
+        "has_erasure": False,
+        "erased_text": "",
         "model_used": "",
         "fallback_used": False,
     }
@@ -1153,9 +1207,106 @@ def _failed_reading_question(
         "answer_crop_path": crop_path or None,
         "ink_ratio": round(ink.ink_ratio, 5) if ink is not None else None,
         "reading_failed": True,
+        "has_erasure": False,
+        "erased_text": "",
         "model_used": "",
         "fallback_used": False,
     }
+
+
+def _maybe_selective_discursive_escalation(
+    questions: list[dict[str, Any]],
+    *,
+    options: dict,
+    warnings: list[str],
+    physical_page_number: int,
+) -> list[dict[str, Any]]:
+    """Qwen permanece; Sol lê só o crop das questões realmente duvidosas."""
+    from app.services.vision.discursive_escalation import should_escalate_discursive_reading
+
+    enabled = bool(
+        options.get(
+            "htr_discursive_selective_escalation_enabled",
+            settings.HTR_DISCURSIVE_SELECTIVE_ESCALATION_ENABLED,
+        )
+    )
+    if not enabled or options.get("is_practical"):
+        return questions
+
+    max_per_page = int(
+        options.get(
+            "htr_discursive_escalation_max_per_page",
+            settings.HTR_DISCURSIVE_ESCALATION_MAX_PER_PAGE,
+        )
+        or 0
+    )
+    model = str(
+        options.get("htr_discursive_escalation_model") or settings.HTR_DISCURSIVE_ESCALATION_MODEL
+    ).strip()
+    if max_per_page <= 0 or not model:
+        return questions
+
+    used = 0
+    for question in questions:
+        if used >= max_per_page:
+            break
+        if not should_escalate_discursive_reading(question):
+            continue
+        crop_path = str(question.get("answer_crop_path") or "")
+        if not crop_path:
+            continue
+        used += 1
+        original_reading = {
+            "answer_transcription": question.get("answer_transcription"),
+            "reading_confidence": question.get("reading_confidence"),
+            "reading_notes": question.get("reading_notes"),
+            "has_erasure": bool(question.get("has_erasure", False)),
+            "erased_text": str(question.get("erased_text") or ""),
+            "model_used": question.get("model_used"),
+        }
+        try:
+            retry = transcribe_answer_crop(
+                crop_path,
+                question_number=int(question.get("number") or 0),
+                vision_model=model,
+                allow_fallback=False,
+            )
+        except Exception as exc:
+            question["original_reading"] = original_reading
+            question["escalated"] = True
+            question["escalation_model"] = model
+            question["escalation_failed"] = True
+            question["alternative_readings"] = list(question.get("alternative_readings") or []) + [
+                {
+                    "text": original_reading.get("answer_transcription") or "",
+                    "source": original_reading.get("model_used") or "original",
+                }
+            ]
+            note = f"Escalonamento seletivo falhou ({type(exc).__name__}: {exc}). Mantida a leitura original."
+            question["reading_notes"] = " ".join(
+                part for part in (question.get("reading_notes") or "", note) if part
+            ).strip()
+            warnings.append(f"Página {physical_page_number}, questão {question.get('number')}: {note}")
+            continue
+
+        question["original_reading"] = original_reading
+        question["escalated"] = True
+        question["escalation_model"] = model
+        question["escalation_failed"] = False
+        question["alternative_readings"] = list(question.get("alternative_readings") or []) + [
+            {
+                "text": original_reading.get("answer_transcription") or "",
+                "source": original_reading.get("model_used") or "original",
+            }
+        ]
+        question["answer_transcription"] = str(retry.get("answer_transcription") or "")
+        question["reading_confidence"] = retry.get("reading_confidence") or question.get("reading_confidence")
+        question["reading_notes"] = str(retry.get("reading_notes") or question.get("reading_notes") or "")
+        question["has_erasure"] = bool(retry.get("has_erasure", False))
+        question["erased_text"] = str(retry.get("erased_text") or "")
+        question["has_answer"] = bool(retry.get("has_answer", bool(question["answer_transcription"].strip())))
+        question["model_used"] = retry.get("model_used") or model
+    return questions
 
 
 def _maybe_escalate(

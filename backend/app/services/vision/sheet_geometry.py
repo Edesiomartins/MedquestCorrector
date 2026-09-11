@@ -124,6 +124,7 @@ class SheetManifest:
     # student in an uploaded scan bundle. Generated answer sheets keep this false.
     template_repeat: bool = False
     template_page_count: int = 0
+    source: str = ""
 
     def page(self, physical_index: int) -> ManifestPageGeometry | None:
         index = int(physical_index)
@@ -147,6 +148,10 @@ class SheetManifest:
     @property
     def has_boxes(self) -> bool:
         return any(page.has_boxes for page in self.pages.values())
+
+    @property
+    def is_external_discursive(self) -> bool:
+        return self.source == "external_discursive"
 
 
 def _float(value: Any) -> float | None:
@@ -257,6 +262,7 @@ def load_manifest(raw: str | dict | None) -> SheetManifest | None:
         pages=pages,
         template_repeat=template_repeat,
         template_page_count=max(0, template_page_count),
+        source=str(data.get("source") or ""),
     )
 
 

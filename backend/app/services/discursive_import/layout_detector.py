@@ -321,7 +321,7 @@ def normalize_docx_to_pdf(raw_docx: bytes) -> dict[str, Any]:
             c.drawString(left, y, line)
             y -= 14.0
         y -= 14.0
-        line_count = max(4, min(int(item.get("answer_lines") or 6), 12))
+        line_count = max(6, min(int(item.get("answer_lines") or 6), 12))
         spacing = 24.0
         available = max(80.0, y - 42.0)
         if line_count * spacing > available:

@@ -52,7 +52,12 @@ class Settings(BaseSettings):
     # Default False ate validacao manual em producao.
     HTR_BATCH_PAGE_ENABLED: bool = False
     # Maximo de crops por contact sheet. Valores inseguros sao limitados no builder.
+    # Maximo de crops por contact sheet. Valores inseguros sao limitados no builder.
     HTR_BATCH_PAGE_MAX_QUESTIONS_PER_SHEET: int = 8
+    # Escalonamento seletivo Qwen -> Sol no HTR V2 de discursivas. Desligado por padrao.
+    HTR_DISCURSIVE_SELECTIVE_ESCALATION_ENABLED: bool = False
+    HTR_DISCURSIVE_ESCALATION_MODEL: str = "openai/gpt-5.6-sol"
+    HTR_DISCURSIVE_ESCALATION_MAX_PER_PAGE: int = 3
 
     # Importação universal de provas discursivas externas. Mantida atrás de flag
     # para permitir rollout e rollback sem tocar no fluxo de provas práticas.

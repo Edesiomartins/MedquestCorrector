@@ -122,6 +122,14 @@ def test_load_manifest_skips_malformed_pages_without_failing():
     assert list(manifest.pages) == [0]
 
 
+def test_load_manifest_reads_external_discursive_source():
+    manifest = load_manifest({**MANIFEST, "source": "external_discursive"})
+
+    assert manifest.source == "external_discursive"
+    assert manifest.is_external_discursive is True
+    assert load_manifest(MANIFEST).is_external_discursive is False
+
+
 # --- conversao de coordenadas -------------------------------------------------
 
 

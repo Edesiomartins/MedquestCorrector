@@ -53,9 +53,22 @@ def test_identity_header_is_added_to_every_page_without_changing_page_size():
 
 
 def test_canonical_pdf_has_at_least_six_writing_lines_when_space_exists():
-    stamped = add_student_identity_header(_two_page_pdf())
-    doc = fitz.open(stream=stamped, filetype="pdf")
+    from docx import Document
+
+    from app.services.discursive_import.layout_detector import normalize_docx_to_pdf
+
+    doc = Document()
+    doc.add_paragraph("Questão 38")
+    doc.add_paragraph("Enunciado curto o bastante para sobrar espaço vertical.")
+    for _ in range(4):
+        doc.add_paragraph("_" * 90)
+    buf = BytesIO()
+    doc.save(buf)
+
+    normalized = normalize_docx_to_pdf(buf.getvalue())
+    stamped = add_student_identity_header(normalized["canonical_pdf"])
+    pdf = fitz.open(stream=stamped, filetype="pdf")
     try:
-        assert all(_long_horizontal_line_count(page) >= 6 for page in doc)
+        assert all(_long_horizontal_line_count(page) >= 6 for page in pdf)
     finally:
-        doc.close()
+        pdf.close()

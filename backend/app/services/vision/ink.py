@@ -166,12 +166,39 @@ def _inset(rgb: np.ndarray, border_inset: float) -> np.ndarray:
     return rgb[dy : height - dy, dx : width - dx]
 
 
+def _suppress_horizontal_guides(mask: np.ndarray) -> np.ndarray:
+    """Remove linhas-guia impressas longas e finas, preservando o manuscrito."""
+    height, width = mask.shape[:2]
+    if height < 8 or width < 24:
+        return mask
+
+    kernel_width = max(15, width // 3)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_width, 1))
+    guides = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    if cv2.countNonZero(guides) == 0:
+        return mask
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(guides, connectivity=8)
+    guide_mask = np.zeros_like(mask)
+    max_guide_height = max(4, int(height * 0.06))
+    min_guide_width = int(width * 0.35)
+    for label in range(1, count):
+        component_width = int(stats[label, cv2.CC_STAT_WIDTH])
+        component_height = int(stats[label, cv2.CC_STAT_HEIGHT])
+        if component_width >= min_guide_width and component_height <= max_guide_height:
+            guide_mask[labels == label] = 1
+    if cv2.countNonZero(guide_mask) == 0:
+        return mask
+    return (mask & (~guide_mask)).astype(np.uint8)
+
+
 def detect_ink(
     image: Image.Image | np.ndarray,
     *,
     ink_threshold: float = DEFAULT_INK_THRESHOLD,
     min_ink_ratio: float = DEFAULT_MIN_INK_RATIO,
     border_inset: float = DEFAULT_BORDER_INSET,
+    suppress_horizontal_guides: bool = False,
 ) -> InkStats:
     """Diz se ha traco manuscrito no recorte, sem chamar modelo nenhum (item 6).
 
@@ -191,6 +218,8 @@ def detect_ink(
 
     region = _inset(rgb, border_inset)
     mask = (ink_map(region) >= ink_threshold).astype(np.uint8)
+    if suppress_horizontal_guides:
+        mask = _suppress_horizontal_guides(mask)
 
     total = int(mask.size)
     count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)

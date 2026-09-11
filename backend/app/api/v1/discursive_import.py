@@ -182,8 +182,7 @@ def confirm_external_discursive_layout(payload: ConfirmLayoutIn, db: Session = D
                     question_number=int(item["question_number"]),
                     question_text=str(item.get("question_text") or "").strip()
                     or f"Questão {int(item['question_number'])}",
-                    expected_answer=str(item.get("expected_answer") or "").strip()
-                    or "Resposta esperada não informada.",
+                    expected_answer=str(item.get("expected_answer") or "").strip(),
                     correction_criteria=(str(item.get("correction_criteria") or "").strip() or None),
                     max_score=float(item.get("max_score") or 1.0),
                     page_number=int(item["page_index"]) + 1,

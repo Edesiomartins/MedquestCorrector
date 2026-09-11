@@ -463,3 +463,87 @@ def test_escalation_survives_a_failing_variant(sheet_pdf, spy_transcribe, stub_g
     assert result["status"] == "success"
     q1 = next(q for q in result["students"][0]["questions"] if q["number"] == 1)
     assert q1["answer_transcription"] == "actina e miosina"
+
+
+def _erasure_transcription(image_path, question_number=None, vision_model=None, allow_fallback=True):
+    return {
+        "number": int(question_number or 0),
+        "prompt_detected": "",
+        "answer_transcription": "veia pulmonar",
+        "reading_confidence": "alta",
+        "ocr_confidence": None,
+        "reading_notes": "rasura visível",
+        "has_answer": True,
+        "has_erasure": True,
+        "erased_text": "artéria comunicante",
+        "image_region": None,
+        "model_used": "vision-mock",
+        "fallback_used": False,
+    }
+
+
+def test_discursive_erasure_keeps_score_and_appears_in_result(
+    sheet_pdf, spy_transcribe, stub_grading, monkeypatch
+):
+    monkeypatch.setattr(vep, "transcribe_answer_crop", _erasure_transcription)
+    monkeypatch.setattr(
+        vep,
+        "grade_discursive_answer",
+        lambda question, _rubric, answer, reading_confidence="media": {
+            "question_number": int(question.get("number") or 0),
+            "score": 1.5,
+            "max_score": 2.0,
+            "verdict": "parcial",
+            "justification": "nota calculada",
+            "detected_concepts": [],
+            "missing_concepts": [],
+            "needs_human_review": False,
+            "review_reason": "",
+            "model_used": "text-mock",
+        },
+    )
+
+    result = analyze_discursive_exam_pdf(str(sheet_pdf), RUBRIC, _options())
+    q1 = next(q for q in result["students"][0]["questions"] if q["number"] == 1)
+
+    assert q1["has_erasure"] is True
+    assert q1["erased_text"] == "artéria comunicante"
+    assert q1["grade"]["score"] == 1.5
+    assert q1["grade"]["verdict"] == "parcial"
+    assert q1["grade"]["needs_human_review"] is True
+    assert "rasura" in (q1["grade"]["review_reason"] or "").lower()
+
+
+def test_practical_erasure_does_not_change_review_rule(
+    sheet_pdf, spy_transcribe, monkeypatch
+):
+    monkeypatch.setattr(vep, "transcribe_answer_crop", _erasure_transcription)
+    monkeypatch.setattr(
+        vep,
+        "grade_practical_answer",
+        lambda question, _rubric, answer, reading_confidence="media": {
+            "question_number": int(question.get("number") or 0),
+            "score": 2.0,
+            "max_score": 2.0,
+            "verdict": "correta",
+            "justification": "ok",
+            "detected_concepts": [],
+            "missing_concepts": [],
+            "needs_human_review": False,
+            "review_reason": "",
+            "model_used": "practical-rule-based",
+        },
+    )
+
+    result = analyze_discursive_exam_pdf(
+        str(sheet_pdf),
+        {**RUBRIC, "is_practical": True},
+        _options(is_practical=True),
+    )
+    q1 = next(q for q in result["students"][0]["questions"] if q["number"] == 1)
+
+    assert q1["has_erasure"] is True
+    assert q1["erased_text"] == "artéria comunicante"
+    assert q1["grade"]["score"] == 2.0
+    assert q1["grade"]["needs_human_review"] is False
+

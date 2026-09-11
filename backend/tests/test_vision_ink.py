@@ -203,3 +203,37 @@ def test_faint_trace_falls_in_the_marginal_band():
 
 def test_real_handwriting_is_never_marginal():
     assert detect_ink(_with_handwriting()).is_marginal is False
+
+
+def _lined_answer_crop(with_handwriting: bool = False) -> Image.Image:
+    img = _canvas((255, 255, 255), size=(480, 220))
+    draw = ImageDraw.Draw(img)
+    for y in (36, 64, 92, 120, 148, 176):
+        draw.line([(16, y), (464, y)], fill=(50, 50, 50), width=2)
+    if with_handwriting:
+        for offset in (0, 40, 80):
+            points = [(28 + i * 14, 50 + offset + int(10 * np.sin(i / 1.8))) for i in range(28)]
+            draw.line(points, fill=BLUE_PEN, width=3, joint="curve")
+    return img
+
+
+def test_blank_white_crop_has_no_ink_with_guide_suppression():
+    assert detect_ink(_canvas(), suppress_horizontal_guides=True).has_ink is False
+
+
+def test_printed_horizontal_guides_are_not_ink_when_suppressed():
+    lined = _lined_answer_crop()
+    assert detect_ink(lined, suppress_horizontal_guides=True).has_ink is False
+
+
+def test_handwriting_on_printed_guides_is_still_ink_when_suppressed():
+    assert detect_ink(_lined_answer_crop(with_handwriting=True), suppress_horizontal_guides=True).has_ink is True
+
+
+def test_detect_ink_without_suppress_keeps_current_behavior():
+    blank = detect_ink(_canvas(GRAY_BOX))
+    handwriting = detect_ink(_with_handwriting())
+    assert blank.has_ink is False
+    assert handwriting.has_ink is True
+    assert detect_ink(_canvas(GRAY_BOX), suppress_horizontal_guides=False).has_ink is False
+    assert detect_ink(_with_handwriting(), suppress_horizontal_guides=False).has_ink is True
