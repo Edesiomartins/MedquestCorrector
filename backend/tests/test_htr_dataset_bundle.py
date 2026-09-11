@@ -282,6 +282,19 @@ def test_export_dataset_really_filters_by_exam(crops):
     assert [row["reference"] for row in rows] == ["da prova pedida"]
 
 
+def test_export_dataset_does_not_return_null_exam_labels_for_another_exam():
+    from app.services.htr_labeling import export_dataset
+
+    wanted, other = uuid4(), uuid4()
+    db = _FilteringDB(
+        [_Label(None, "órfão sem exam_id"), _Label(wanted, "da prova pedida"), _Label(other, "outra")]
+    )
+
+    rows = export_dataset(db, exam_id=wanted)
+
+    assert [row["reference"] for row in rows] == ["da prova pedida"]
+
+
 # --- endpoint ------------------------------------------------------------------
 
 

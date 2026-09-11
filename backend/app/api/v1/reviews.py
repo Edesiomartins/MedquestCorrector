@@ -68,6 +68,21 @@ def _effective_question_score(s: QuestionScore) -> float:
     return float(s.ai_score or 0)
 
 
+def _exam_id_from_student_result(db: Session, sr: StudentResult | None) -> UUID | None:
+    """exam_id vem do lote persistido, nunca do payload da revisão."""
+    if sr is None:
+        return None
+    batch = db.query(UploadBatch).filter(UploadBatch.id == sr.batch_id).first()
+    if batch is None:
+        logger.warning(
+            "StudentResult %s sem UploadBatch %s; exam_id indisponível para rotulagem HTR.",
+            sr.id,
+            sr.batch_id,
+        )
+        return None
+    return batch.exam_id
+
+
 def _batch_completion_recheck(db: Session, batch_id: UUID) -> None:
     pending = (
         db.query(QuestionScore)
@@ -171,18 +186,28 @@ def update_score(
         )
 
     sr = db.query(StudentResult).filter(StudentResult.id == qs.student_result_id).first()
+    exam_id = _exam_id_from_student_result(db, sr)
 
     # A revisão da transcrição vira dado rotulado antes de a leitura antiga ser
     # sobrescrita — é o par (recorte, leitura do modelo, leitura humana), o dado
     # mais caro deste domínio, colhido sem esforço adicional.
     # Ver docs/HTR_PLANO_EXECUCAO.md, item 13.
     if payload.extracted_answer_text is not None:
-        record_review(
-            db,
-            question_score=qs,
-            human_transcription=payload.extracted_answer_text,
-            student_id=sr.student_id if sr else None,
-        )
+        if exam_id is not None:
+            record_review(
+                db,
+                question_score=qs,
+                human_transcription=payload.extracted_answer_text,
+                student_id=sr.student_id if sr else None,
+                exam_id=exam_id,
+            )
+        else:
+            logger.error(
+                "Rótulo HTR ignorado por ausência de exam_id (question_score=%s, "
+                "student_result_id=%s). A revisão da nota segue normalmente.",
+                qs.id,
+                sr.id if sr else qs.student_result_id,
+            )
         qs.extracted_answer_text = payload.extracted_answer_text or None
         qs.transcription_edited_by_human = True
 
