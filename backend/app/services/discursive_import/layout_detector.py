@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import base64
+import logging
+import os
 import re
+import tempfile
 import unicodedata
 from dataclasses import dataclass
 from io import BytesIO
@@ -13,10 +16,19 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
+from app.services.openrouter_vision_client import (
+    OpenRouterVisionError,
+    detect_discursive_page_layout,
+)
+
 QUESTION_RE = re.compile(r"^\s*(?:questao|q)\s*0*(\d{1,4})\b", re.IGNORECASE)
 LINE_CHAR_RE = re.compile(r"^[\s_\.\-–—]+$")
 MIN_VECTOR_LINE_WIDTH_FRAC = 0.32
 PREVIEW_DPI = 110
+LAYOUT_VISION_DPI = 220
+MIN_PAGE_TEXT_CHARS = 12
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -160,6 +172,216 @@ def _answer_box_for_section(
     return x0, y0, x1, y1, 0.62, "blank_space", []
 
 
+def _page_has_sufficient_text(page: fitz.Page, lines: list[TextLine]) -> bool:
+    raw = (page.get_text("text") or "").strip()
+    if len(raw) >= MIN_PAGE_TEXT_CHARS:
+        return True
+    return any(_question_number(line.text) is not None for line in lines)
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clamp_answer_box(
+    x_pt: float, y_bottom_pt: float, width_pt: float, height_pt: float, page_width: float, page_height: float
+) -> tuple[float, float, float, float]:
+    x_pt = max(0.0, min(x_pt, page_width - 8.0))
+    width_pt = max(8.0, min(width_pt, page_width - x_pt))
+    y_bottom_pt = max(0.0, min(y_bottom_pt, page_height - 8.0))
+    height_pt = max(8.0, min(height_pt, page_height - y_bottom_pt))
+    return x_pt, y_bottom_pt, width_pt, height_pt
+
+
+def _box_from_vision_item(
+    item: dict[str, Any], page_width: float, page_height: float
+) -> tuple[float, float, float, float] | None:
+    box = item.get("box") if isinstance(item.get("box"), dict) else item.get("answer_box")
+    if not isinstance(box, dict):
+        box = item
+
+    x_pt = _float_or_none(box.get("x_pt"))
+    y_bottom_pt = _float_or_none(box.get("y_bottom_pt"))
+    width_pt = _float_or_none(box.get("width_pt"))
+    height_pt = _float_or_none(box.get("height_pt"))
+    if None not in (x_pt, y_bottom_pt, width_pt, height_pt) and width_pt > 0 and height_pt > 0:
+        return _clamp_answer_box(x_pt, y_bottom_pt, width_pt, height_pt, page_width, page_height)
+
+    x = _float_or_none(box.get("x"))
+    y = _float_or_none(box.get("y"))
+    width = _float_or_none(box.get("width") if box.get("width") is not None else box.get("w"))
+    height = _float_or_none(box.get("height") if box.get("height") is not None else box.get("h"))
+    x0 = _float_or_none(box.get("x0"))
+    y0 = _float_or_none(box.get("y0"))
+    x1 = _float_or_none(box.get("x1"))
+    y1 = _float_or_none(box.get("y1"))
+    if None not in (x0, y0, x1, y1):
+        x, y, width, height = x0, y0, x1 - x0, y1 - y0
+    if None in (x, y, width, height) or width <= 0 or height <= 0:
+        return None
+
+    if max(abs(x), abs(y), abs(width), abs(height)) <= 1.5:
+        x_pt = x * page_width
+        width_pt = width * page_width
+        top_pt = y * page_height
+        height_pt = height * page_height
+    else:
+        x_pt, width_pt, top_pt, height_pt = x, width, y, height
+    y_bottom_pt = page_height - (top_pt + height_pt)
+    return _clamp_answer_box(x_pt, y_bottom_pt, width_pt, height_pt, page_width, page_height)
+
+
+def _render_page_png(page: fitz.Page, dpi: float = LAYOUT_VISION_DPI) -> str:
+    zoom = dpi / 72.0
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+    handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    try:
+        handle.write(pix.tobytes("png"))
+    finally:
+        handle.close()
+    return handle.name
+
+
+def _vision_questions_for_page(
+    page: fitz.Page,
+    *,
+    page_index: int,
+    page_width: float,
+    page_height: float,
+    seen_numbers: set[int],
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    image_path = _render_page_png(page)
+    try:
+        detected = detect_discursive_page_layout(image_path)
+    except OpenRouterVisionError as exc:
+        warnings.append(
+            f"Página {page_index + 1}: detecção visual do layout falhou ({exc}). "
+            "Ajuste as áreas manualmente se necessário."
+        )
+        return []
+    except Exception as exc:
+        logger.warning("Falha inesperada na detecção visual da página %s: %s", page_index + 1, exc)
+        warnings.append(
+            f"Página {page_index + 1}: detecção visual do layout falhou. "
+            "Ajuste as áreas manualmente se necessário."
+        )
+        return []
+    finally:
+        try:
+            os.unlink(image_path)
+        except OSError:
+            pass
+
+    questions: list[dict[str, Any]] = []
+    for item in detected.get("questions") or []:
+        raw_number = item.get("number") if item.get("number") is not None else item.get("question_number")
+        try:
+            qnum = int(raw_number)
+        except (TypeError, ValueError):
+            continue
+        if qnum <= 0:
+            continue
+        box = _box_from_vision_item(item, page_width, page_height)
+        if box is None:
+            warnings.append(f"Q{qnum} na página {page_index + 1}: geometria visual inválida.")
+            continue
+        x_pt, y_bottom_pt, width_pt, height_pt = box
+        question_text = str(
+            item.get("question_text") or item.get("prompt") or item.get("prompt_detected") or ""
+        ).strip()
+        if qnum in seen_numbers:
+            warnings.append(f"Número de questão duplicado detectado: Q{qnum}.")
+        seen_numbers.add(qnum)
+        questions.append(
+            {
+                "question_number": qnum,
+                "page_index": page_index,
+                "question_text": question_text,
+                "x_pt": round(x_pt, 3),
+                "y_bottom_pt": round(y_bottom_pt, 3),
+                "width_pt": round(width_pt, 3),
+                "height_pt": round(height_pt, 3),
+                "confidence": 0.72,
+                "provenance": "vision_scan",
+                "answer_line_count": 0,
+            }
+        )
+    if questions:
+        warnings.append(
+            f"Página {page_index + 1}: layout detectado visualmente (scan). Confirme as áreas de resposta."
+        )
+    return questions
+
+
+def _structural_questions_for_page(
+    page: fitz.Page,
+    *,
+    page_index: int,
+    width: float,
+    height: float,
+    lines: list[TextLine],
+    seen_numbers: set[int],
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    questions: list[dict[str, Any]] = []
+    labels = [(idx, line, _question_number(line.text)) for idx, line in enumerate(lines)]
+    labels = [(idx, line, number) for idx, line, number in labels if number is not None]
+    vector_lines = _vector_answer_lines(page)
+
+    for pos, (line_index, label, qnum) in enumerate(labels):
+        assert qnum is not None
+        next_label_y = labels[pos + 1][1].y0 if pos + 1 < len(labels) else height - 18.0
+        section_lines = [
+            line
+            for line in lines[line_index + 1 :]
+            if line.y0 < next_label_y and _question_number(line.text) is None
+        ]
+        x0, y0, x1, y1, confidence, provenance, answer_lines = _answer_box_for_section(
+            page,
+            label,
+            section_lines,
+            vector_lines,
+            next_label_y,
+        )
+        question_content_lines = [line for line in section_lines if line.y0 < y0]
+        question_text = _clean_question_text(label, question_content_lines)
+        if not question_text:
+            warnings.append(f"Q{qnum} na página {page_index + 1}: enunciado não pôde ser extraído.")
+
+        if qnum in seen_numbers:
+            warnings.append(f"Número de questão duplicado detectado: Q{qnum}.")
+        seen_numbers.add(qnum)
+
+        if y1 <= y0 or x1 <= x0:
+            warnings.append(f"Q{qnum} na página {page_index + 1}: área de resposta precisa de ajuste manual.")
+            y0 = max(label.y1 + 8.0, min(height - 72.0, y0))
+            y1 = min(height - 18.0, max(y0 + 54.0, y1))
+            x0, x1 = 36.0, width - 36.0
+            confidence = min(confidence, 0.35)
+
+        questions.append(
+            {
+                "question_number": int(qnum),
+                "page_index": page_index,
+                "question_text": question_text,
+                "x_pt": round(x0, 3),
+                "y_bottom_pt": round(height - y1, 3),
+                "width_pt": round(x1 - x0, 3),
+                "height_pt": round(y1 - y0, 3),
+                "confidence": round(confidence, 3),
+                "provenance": provenance,
+                "answer_line_count": len(answer_lines),
+            }
+        )
+    return questions
+
+
 def detect_pdf_layout(raw_pdf: bytes) -> dict[str, Any]:
     if not raw_pdf:
         raise ValueError("PDF vazio.")
@@ -183,55 +405,35 @@ def detect_pdf_layout(raw_pdf: bytes) -> dict[str, Any]:
             )
 
             lines = _text_lines(page)
-            labels = [(idx, line, _question_number(line.text)) for idx, line in enumerate(lines)]
-            labels = [(idx, line, number) for idx, line, number in labels if number is not None]
-            vector_lines = _vector_answer_lines(page)
-
-            for pos, (line_index, label, qnum) in enumerate(labels):
-                assert qnum is not None
-                next_label_y = labels[pos + 1][1].y0 if pos + 1 < len(labels) else height - 18.0
-                section_lines = [
-                    line
-                    for line in lines[line_index + 1 :]
-                    if line.y0 < next_label_y and _question_number(line.text) is None
-                ]
-                x0, y0, x1, y1, confidence, provenance, answer_lines = _answer_box_for_section(
+            page_questions = _structural_questions_for_page(
+                page,
+                page_index=page_index,
+                width=width,
+                height=height,
+                lines=lines,
+                seen_numbers=seen_numbers,
+                warnings=warnings,
+            )
+            needs_vision = (not _page_has_sufficient_text(page, lines)) or (not page_questions)
+            if needs_vision:
+                previous = page_questions
+                for item in previous:
+                    seen_numbers.discard(int(item["question_number"]))
+                vision_questions = _vision_questions_for_page(
                     page,
-                    label,
-                    section_lines,
-                    vector_lines,
-                    next_label_y,
+                    page_index=page_index,
+                    page_width=width,
+                    page_height=height,
+                    seen_numbers=seen_numbers,
+                    warnings=warnings,
                 )
-                question_content_lines = [line for line in section_lines if line.y0 < y0]
-                question_text = _clean_question_text(label, question_content_lines)
-                if not question_text:
-                    warnings.append(f"Q{qnum} na página {page_index + 1}: enunciado não pôde ser extraído.")
-
-                if qnum in seen_numbers:
-                    warnings.append(f"Número de questão duplicado detectado: Q{qnum}.")
-                seen_numbers.add(qnum)
-
-                if y1 <= y0 or x1 <= x0:
-                    warnings.append(f"Q{qnum} na página {page_index + 1}: área de resposta precisa de ajuste manual.")
-                    y0 = max(label.y1 + 8.0, min(height - 72.0, y0))
-                    y1 = min(height - 18.0, max(y0 + 54.0, y1))
-                    x0, x1 = 36.0, width - 36.0
-                    confidence = min(confidence, 0.35)
-
-                questions.append(
-                    {
-                        "question_number": int(qnum),
-                        "page_index": page_index,
-                        "question_text": question_text,
-                        "x_pt": round(x0, 3),
-                        "y_bottom_pt": round(height - y1, 3),
-                        "width_pt": round(x1 - x0, 3),
-                        "height_pt": round(y1 - y0, 3),
-                        "confidence": round(confidence, 3),
-                        "provenance": provenance,
-                        "answer_line_count": len(answer_lines),
-                    }
-                )
+                if vision_questions:
+                    page_questions = vision_questions
+                else:
+                    for item in previous:
+                        seen_numbers.add(int(item["question_number"]))
+                    page_questions = previous
+            questions.extend(page_questions)
 
         if not questions:
             warnings.append("Nenhuma questão discursiva foi detectada automaticamente.")

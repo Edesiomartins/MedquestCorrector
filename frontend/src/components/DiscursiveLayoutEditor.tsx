@@ -49,6 +49,7 @@ function clamp(value: number, min: number, max: number) {
 function provenanceLabel(value?: string | null) {
   if (value === "answer_lines") return "linhas de resposta";
   if (value === "blank_space") return "área em branco";
+  if (value === "vision_scan") return "detecção visual (scan)";
   if (value === "manual") return "manual";
   return value || "detecção automática";
 }

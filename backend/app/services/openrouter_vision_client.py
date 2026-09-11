@@ -651,6 +651,75 @@ reading_confidence: alta = leu tudo com clareza; media = poucos trechos duvidoso
 """.strip()
 
 
+# ---------------------------------------------------------------------------
+# Layout de prova discursiva escaneada: localizar caixas, sem transcrever HTR.
+# ---------------------------------------------------------------------------
+
+LAYOUT_DETECTION_PROMPT = """
+Você analisa a FOTO ou o SCAN de uma folha de prova discursiva para LOCALIZAR o layout impresso.
+
+Tarefa: identificar cada questão impressa e a área de linhas onde o aluno deve escrever.
+
+NÃO transcreva a resposta manuscrita.
+NÃO avalie se a resposta está certa ou errada.
+NÃO invente gabarito, resposta esperada, rubrica ou critérios de correção.
+Você não recebe gabarito e não deve usá-lo.
+
+Para cada questão visível, devolva:
+- number: o número impresso da questão (ex.: 35)
+- question_text: o enunciado impresso, sem as linhas de resposta
+- coordenadas da ÁREA DE RESPOSTA (as linhas em que o aluno escreve), não do enunciado
+  em fração da página (0 a 1), origem no canto SUPERIOR esquerdo: x, y, width, height
+
+Devolva somente JSON válido, sem markdown:
+{
+  "questions": [
+    {
+      "number": 35,
+      "question_text": "",
+      "x": 0.07,
+      "y": 0.32,
+      "width": 0.86,
+      "height": 0.40
+    }
+  ]
+}
+""".strip()
+
+
+def detect_discursive_page_layout(
+    image_path: str,
+    *,
+    vision_model: str | None = None,
+) -> dict:
+    """Localiza questões e áreas de resposta numa página escaneada.
+
+    Reusa o mesmo cliente OpenRouter das provas escaneadas. Não é HTR: o modelo
+    só devolve geometria e enunciado visível, sem gabarito e sem transcrição da
+    resposta do aluno.
+    """
+    if not settings.OPENROUTER_API_KEY:
+        raise OpenRouterVisionError("OPENROUTER_API_KEY não configurada.")
+
+    raw_output, model, fallback_used = _call_with_fallbacks(
+        image_path=image_path,
+        prompt=LAYOUT_DETECTION_PROMPT,
+        vision_model=vision_model,
+        json_mode=True,
+        what="detecção de layout discursivo",
+    )
+    parsed = _load_json_object(raw_output)
+    questions = parsed.get("questions") if isinstance(parsed, dict) else None
+    if not isinstance(questions, list):
+        questions = []
+    return {
+        "questions": [item for item in questions if isinstance(item, dict)],
+        "model_used": model,
+        "fallback_used": fallback_used,
+        "raw_model_output": raw_output,
+    }
+
+
 def transcribe_answer_batch(
     *,
     context_image_paths: list[str],

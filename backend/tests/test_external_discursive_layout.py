@@ -164,3 +164,110 @@ def test_docx_question_label_with_underscores_does_not_pollute_question_text():
     q = detected['questions'][0]
     assert 'punho' in q['question_text'].lower()
     assert not q['question_text'].lstrip().startswith('_')
+
+
+def _rasterized_pdf(source_pdf: bytes) -> bytes:
+    import pymupdf as fitz
+
+    src = fitz.open(stream=source_pdf, filetype="pdf")
+    out = fitz.open()
+    try:
+        for page in src:
+            pix = page.get_pixmap(matrix=fitz.Matrix(150 / 72, 150 / 72), alpha=False)
+            new_page = out.new_page(width=page.rect.width, height=page.rect.height)
+            new_page.insert_image(new_page.rect, pixmap=pix)
+        return out.tobytes()
+    finally:
+        src.close()
+        out.close()
+
+
+def test_textual_pdf_keeps_structural_detector_and_skips_vision(monkeypatch):
+    from app.services.discursive_import import layout_detector as detector
+
+    called = []
+    monkeypatch.setattr(
+        detector,
+        "detect_discursive_page_layout",
+        lambda *a, **k: called.append(1) or {"questions": []},
+    )
+    result = detect_pdf_layout(_pdf_with_lined_question(38))
+    assert called == []
+    assert [q["question_number"] for q in result["questions"]] == [38]
+    assert result["questions"][0]["provenance"] == "answer_lines"
+
+
+def test_scanned_pdf_without_text_uses_visual_fallback(monkeypatch):
+    from app.services.discursive_import import layout_detector as detector
+
+    calls = []
+
+    def fake_layout(image_path, vision_model=None):
+        calls.append({"image_path": image_path, "vision_model": vision_model})
+        return {
+            "questions": [
+                {
+                    "number": 35,
+                    "question_text": "Explique a diferença morfológica fundamental entre as articulações.",
+                    "x": 0.07,
+                    "y": 0.22,
+                    "width": 0.86,
+                    "height": 0.45,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(detector, "detect_discursive_page_layout", fake_layout)
+    raster = _rasterized_pdf(_pdf_with_lined_question(35))
+    result = detect_pdf_layout(raster)
+
+    assert calls, "PDF escaneado deve acionar o fallback visual"
+    assert [q["question_number"] for q in result["questions"]] == [35]
+    q = result["questions"][0]
+    assert q["provenance"] == "vision_scan"
+    assert q["page_index"] == 0
+    assert "diferença morfológica" in q["question_text"].lower()
+    assert q["width_pt"] > 400
+    assert q["height_pt"] > 200
+    assert q["x_pt"] >= 0
+    assert q["y_bottom_pt"] >= 0
+    assert q["x_pt"] + q["width_pt"] <= 600
+    assert q["y_bottom_pt"] + q["height_pt"] <= 850
+
+
+def test_layout_vision_prompt_is_blind_to_answer_key():
+    from app.services.openrouter_vision_client import LAYOUT_DETECTION_PROMPT
+
+    folded = LAYOUT_DETECTION_PROMPT.casefold()
+    assert "não transcreva a resposta manuscrita" in folded
+    assert "não invente gabarito" in folded
+    assert "expected_answer" not in folded
+    assert "correction_criteria" not in folded
+
+
+def test_layout_detection_reuses_existing_openrouter_client(monkeypatch, tmp_path):
+    from app.services import openrouter_vision_client as client
+
+    image = tmp_path / "page.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n")
+    captured = {}
+    monkeypatch.setattr(client.settings, "OPENROUTER_API_KEY", "test-key")
+
+    def fake_call(**kwargs):
+        captured.update(kwargs)
+        return (
+            '{"questions":[{"number":35,"question_text":"enunciado da questão 35","x":0.1,"y":0.2,"width":0.8,"height":0.4}]}',
+            "vision-mock",
+            False,
+        )
+
+    monkeypatch.setattr(client, "_call_with_fallbacks", fake_call)
+    out = client.detect_discursive_page_layout(str(image))
+
+    assert captured["prompt"] is client.LAYOUT_DETECTION_PROMPT
+    assert captured["json_mode"] is True
+    assert captured["what"] == "detecção de layout discursivo"
+    assert "expected_answer" not in captured
+    assert "correction_criteria" not in captured
+    assert out["questions"][0]["number"] == 35
+    assert out["model_used"] == "vision-mock"
