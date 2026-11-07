@@ -374,3 +374,16 @@ def test_clear_replacement_after_erasure_is_graded_as_the_final_text():
     out = _grade("Peitoral maior", "Deltoide")
     assert out["verdict"] == "incorreta"
     assert out["score"] == 0.0
+
+
+def test_direto_is_the_right_side_when_the_muscle_matches():
+    out = _grade_mode("vasto medial D", "M. VASTO medial direto", "required")
+    assert out["verdict"] == "correta"
+    assert out["score"] == 1.0
+
+
+def test_dereto_on_the_opposite_side_is_wrong_not_omitted():
+    out = _grade_mode("sartorio E", "M. SARTORIO dereto", "required")
+    assert out["verdict"] == "incorreta"
+    assert out["score"] == 0.0
+    assert "lateralidade divergente" in out["justification"].lower()

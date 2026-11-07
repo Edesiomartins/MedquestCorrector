@@ -188,6 +188,9 @@ def normalize_practical_answer(value: str) -> str:
     text = separate_compact_anatomy_abbreviations(text)
     text = expand_anatomy_abbreviations(text)
     text = re.sub(r"\besq(?:\.|uerda|uerdo)?\b", " esquerdo ", text)
+    # "direto" e "dereto" são grafias inequívocas de "direito" neste gabarito.
+    # O lado passa a existir e a comparação D/E continua valendo.
+    text = re.sub(r"\b(?:direto|dereto)\b", " direito ", text)
     text = re.sub(r"\bdir(?:\.|eita|eito)?\b", " direito ", text)
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
