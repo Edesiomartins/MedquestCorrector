@@ -31,7 +31,7 @@ from app.services.vision.escalation import (
     should_escalate,
 )
 from app.services.vision.ink import detect_ink, normalize_for_reading
-from app.services.vision.qr_decode import decode_sheet_qr
+from app.services.vision.qr_decode import decode_sheet_qr, decode_sheet_qr_from_pdf
 from app.services.vision.sheet_geometry import DEFAULT_CROP_DPI, load_manifest, render_pdf_box
 
 logger = logging.getLogger(__name__)
@@ -893,6 +893,8 @@ def _read_page_by_crops(
         options=options,
         crop_dir=crop_dir,
         warnings=warnings,
+        pdf_path=pdf_path,
+        page_index=page_index,
     )
 
     return {
@@ -1052,6 +1054,8 @@ def _read_page_by_batch(
         options=options,
         crop_dir=crop_dir,
         warnings=warnings,
+        pdf_path=pdf_path,
+        page_index=page_index,
     )
 
     return {
@@ -1093,6 +1097,8 @@ def _identify_page(
     options: dict,
     crop_dir: Path,
     warnings: list[str],
+    pdf_path: str | None = None,
+    page_index: int | None = None,
 ) -> dict:
     """QR confere o cadastro. Manifesto não escolhe o aluno. Nome genérico não esconde o manuscrito."""
     payload = None
@@ -1102,6 +1108,15 @@ def _identify_page(
     except Exception as exc:
         logger.warning("Falha ao decodificar QR da página %d: %s", physical_page_number, exc)
         payload = None
+    if payload is None and pdf_path and page_index is not None:
+        try:
+            payload = decode_sheet_qr_from_pdf(pdf_path, page_index)
+        except Exception as exc:
+            logger.warning(
+                "Releitura do QR no PDF falhou na página %d: %s",
+                physical_page_number,
+                exc,
+            )
 
     manifest_student_id = str(getattr(manifest_page, "student_id", "") or "")
     roster = options.get("students_by_id") if isinstance(options.get("students_by_id"), dict) else {}

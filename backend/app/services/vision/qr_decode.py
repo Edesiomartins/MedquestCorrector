@@ -14,6 +14,7 @@ sem esforço num recorte ampliado.
 
 from __future__ import annotations
 
+import io
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -39,6 +40,26 @@ class PageQrPayload:
     student_id: str
     page_in_student: int
     total_pages_for_student: int
+
+
+def decode_sheet_qr_from_pdf(pdf_path: str, page_index: int, dpi: int = 300) -> PageQrPayload | None:
+    """Segunda leitura do QR, rasterizando a página direto do PDF.
+
+    A imagem de trabalho do pipeline fica em 220 DPI. Num scan ruim esse
+    tamanho perde o QR, e ampliar a imagem já degradada não o recupera.
+    Renderizar de novo o PDF a 300 DPI usa os pixels da origem. Nesta medição,
+    220 DPI não lê o QR degradado e 320 DPI ou mais também deixa de ler.
+    """
+    import pymupdf as fitz
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[page_index]
+        pixmap = page.get_pixmap(dpi=dpi)
+        image = Image.open(io.BytesIO(pixmap.tobytes("png")))
+    finally:
+        doc.close()
+    return decode_sheet_qr(image)
 
 
 def decode_sheet_qr(image: Image.Image) -> PageQrPayload | None:
