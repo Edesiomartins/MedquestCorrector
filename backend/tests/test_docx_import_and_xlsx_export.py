@@ -85,7 +85,7 @@ def test_export_results_xlsx_summary_student_and_review_sheets():
     assert wb.sheetnames[-1] == "Revisões Necessárias"
     assert len(wb.sheetnames) == 3
     ws = wb["Resultado Final"]
-    assert ws["E3"].value == 0.5
+    assert ws["E3"].value == 1.5
     assert "JSON recuperado" not in str(ws["G3"].value)
     alum = wb[wb.sheetnames[1]]
     assert alum["A5"].value == "Matrícula"

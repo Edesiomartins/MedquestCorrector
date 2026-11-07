@@ -38,6 +38,8 @@ type StudentResultDetail = {
   identity_source?: string | null;
   detected_student_name?: string | null;
   detected_registration?: string | null;
+  handwritten_name?: string | null;
+  confirmed_name?: string | null;
   warnings_json?: string[] | null;
   total_score: number;
   status: string;
@@ -75,6 +77,7 @@ export default function ReviewPage() {
   const [localScores, setLocalScores] = useState<
     Record<string, { score: number; comment: string; transcription: string }>
   >({});
+  const [gradeConfirmed, setGradeConfirmed] = useState<Record<string, boolean>>({});
 
   const fetchNext = async () => {
     setLoading(true);
@@ -93,6 +96,7 @@ export default function ReviewPage() {
         };
       }
       setLocalScores(initial);
+      setGradeConfirmed({});
     } catch (err: unknown) {
       const statusCode = (
         err &&
@@ -158,10 +162,8 @@ export default function ReviewPage() {
           await api.post(`/reviews/scores/${s.id}`, {
             final_score: local.score,
             professor_comment: local.comment || null,
-            // Enviado sempre, mesmo sem alteracao: a leitura CONFIRMADA vale
-            // tanto quanto a corrigida. Gravar so as correcoes deixaria o
-            // conjunto enviesado, com todo exemplo sendo um erro do modelo.
             extracted_answer_text: local.transcription ?? "",
+            grade_confirmed: gradeConfirmed[s.id] === true || local.transcription === (s.extracted_answer_text ?? ""),
           });
         }
       }
@@ -183,6 +185,12 @@ export default function ReviewPage() {
       ...prev,
       [scoreId]: { ...prev[scoreId], [field]: value },
     }));
+    if (field === "transcription") {
+      setGradeConfirmed((prev) => ({ ...prev, [scoreId]: false }));
+    }
+    if (field === "score") {
+      setGradeConfirmed((prev) => ({ ...prev, [scoreId]: true }));
+    }
   };
 
   const handleExportBatch = async (batchId = result?.batch_id) => {
@@ -359,6 +367,14 @@ export default function ReviewPage() {
                 Página física principal: {result.physical_page}
               </span>
             ) : null}
+            {result.detected_student_name ? (
+              <span className="block">
+                Nome manuscrito: {result.detected_student_name}
+              </span>
+            ) : null}
+            {result.confirmed_name ? (
+              <span className="block">Nome confirmado: {result.confirmed_name}</span>
+            ) : null}
           </p>
         </div>
         <button
@@ -469,7 +485,9 @@ export default function ReviewPage() {
                     Transcrição
                   </span>
                   {local.transcription !== (s.extracted_answer_text ?? "") ? (
-                    <span className="text-xs text-emerald-600">corrigida</span>
+                    <span className="text-xs text-amber-700">
+                      transcrição alterada — confirme a nota de novo
+                    </span>
                   ) : null}
                 </div>
                 <textarea

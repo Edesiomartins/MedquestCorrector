@@ -109,7 +109,8 @@ def test_max_three_escalations_per_page(monkeypatch):
     assert [item["question_number"] for item in calls] == [1, 2, 3]
     assert all(item["allow_fallback"] is False for item in calls)
     assert all("expected_answer" not in item and "correction_criteria" not in item for item in calls)
-    assert [q["answer_transcription"] for q in out[:3]] == ["sol 1", "sol 2", "sol 3"]
+    assert [q["answer_transcription"] for q in out[:3]] == ["articulação plana"] * 3
+    assert [q["alternative_readings"][-1]["text"] for q in out[:3]] == ["sol 1", "sol 2", "sol 3"]
     assert out[3]["answer_transcription"] == "articulação plana"
     assert out[0]["original_reading"]["model_used"] == "qwen-mock"
     assert out[0]["escalated"] is True
@@ -145,7 +146,7 @@ def test_sol_failure_keeps_qwen_reading_and_flags_review(monkeypatch):
     assert grade["score"] == 1.0
 
 
-def test_sol_success_replaces_transcription_and_keeps_erasure(monkeypatch):
+def test_discordant_reread_keeps_the_first_transcription(monkeypatch):
     def fake_transcribe(*_args, **_kwargs):
         return {
             "answer_transcription": "veia pulmonar inferior esquerda",
@@ -164,9 +165,9 @@ def test_sol_success_replaces_transcription_and_keeps_erasure(monkeypatch):
         warnings=[],
         physical_page_number=1,
     )
-    assert out[0]["answer_transcription"] == "veia pulmonar inferior esquerda"
-    assert out[0]["has_erasure"] is True
-    assert out[0]["erased_text"] == "artéria comunicante"
+    assert out[0]["answer_transcription"] == "articulação plana"
+    assert out[0]["alternative_readings"][-1]["text"] == "veia pulmonar inferior esquerda"
+    assert out[0]["reading_confidence"] == "baixa"
     assert out[0]["escalation_failed"] is False
 
 

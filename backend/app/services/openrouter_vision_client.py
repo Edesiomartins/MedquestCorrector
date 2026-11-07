@@ -91,7 +91,11 @@ def extract_answers_from_page_image(
         context["page_number"] = page_number
     requested_model = str(context.get("vision_model") or settings.OPENROUTER_VISION_MODEL).strip()
     models = _vision_model_candidates(requested_model)
-    data_url = encode_image_to_data_url(image_path)
+    region_paths = [
+        str(path)
+        for path in (context.get("answer_region_paths") or [])
+        if str(path or "").strip()
+    ]
     prompt = _build_prompt(context)
     errors: list[str] = []
 
@@ -99,7 +103,16 @@ def extract_answers_from_page_image(
         started = time.perf_counter()
         fallback_used = index > 0
         try:
-            raw = _call_openrouter_vision(model=model, prompt=prompt, data_url=data_url)
+            if region_paths:
+                raw, _usage = _call_openrouter_vision_multi(
+                    model=model,
+                    prompt=prompt,
+                    image_paths=[image_path, *region_paths],
+                    json_mode=True,
+                )
+            else:
+                data_url = encode_image_to_data_url(image_path)
+                raw = _call_openrouter_vision(model=model, prompt=prompt, data_url=data_url)
             parsed = _load_json_object(raw)
             if parsed.get("status") == "error":
                 raise OpenRouterVisionError(str(parsed.get("error") or "invalid_json"))
@@ -183,7 +196,7 @@ ANSWER_KEY_CONTEXT_KEYS = frozenset(
     }
 )
 
-_INTERNAL_CONTEXT_KEYS = frozenset({"vision_model", "image_path"})
+_INTERNAL_CONTEXT_KEYS = frozenset({"vision_model", "image_path", "answer_region_paths"})
 
 
 def _strip_answer_key(value: Any, removed: list[str]) -> Any:
@@ -709,7 +722,9 @@ def detect_discursive_page_layout(
         what="detecção de layout discursivo",
     )
     parsed = _load_json_object(raw_output)
-    questions = parsed.get("questions") if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict) or parsed.get("status") == "error":
+        raise OpenRouterVisionError("JSON inválido na detecção de layout.")
+    questions = parsed.get("questions")
     if not isinstance(questions, list):
         questions = []
     return {

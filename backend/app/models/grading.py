@@ -26,6 +26,8 @@ class StudentResult(Base):
     physical_page = Column(Integer, nullable=True)
     detected_student_name = Column(String(255), nullable=True)
     detected_registration = Column(String(100), nullable=True)
+    handwritten_name = Column(String(255), nullable=True)
+    confirmed_name = Column(String(255), nullable=True)
     warnings_json = Column(JSONB, nullable=False, default=list)
     page_number = Column(Integer, nullable=False)
     total_score = Column(Float, default=0.0)

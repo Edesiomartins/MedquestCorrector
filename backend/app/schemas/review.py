@@ -39,6 +39,8 @@ class StudentResultDetail(BaseModel):
     identity_source: Optional[str] = None
     detected_student_name: Optional[str] = None
     detected_registration: Optional[str] = None
+    handwritten_name: Optional[str] = None
+    confirmed_name: Optional[str] = None
     warnings_json: Optional[list[str]] = None
     total_score: float
     status: str
@@ -64,3 +66,4 @@ class UpdateScore(BaseModel):
     # string vazia significa "a caixa está em branco", que é informação diferente
     # e é justamente o caso que mede alucinação.
     extracted_answer_text: Optional[str] = None
+    grade_confirmed: bool = False

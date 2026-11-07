@@ -293,3 +293,84 @@ def test_basilar_artery_does_not_accept_another_vessel():
 
     assert out["verdict"] == "incorreta"
     assert out["score"] == 0.0
+
+
+def _grade_mode(expected: str, answer: str, laterality_mode: str) -> dict:
+    return grade_practical_answer(
+        {"number": 1, "reading_confidence": "alta", "max_score": 1, "laterality_mode": laterality_mode},
+        {"expected_answer": expected, "max_score": 1, "laterality_mode": laterality_mode},
+        answer,
+        reading_confidence="alta",
+    )
+
+
+def test_coracobrachialis_spacing_is_the_same_muscle():
+    out = _grade("Coracobraquial D", "M. Coraco braquial D.")
+    assert out["verdict"] == "correta"
+    assert out["score"] == 1.0
+
+
+def test_latissimus_and_longissimus_stay_distinct():
+    out = _grade("Longuíssimo do tórax/dorso D", "Músculo Latíssimo do dorso direito")
+    assert out["verdict"] == "incorreta"
+    assert out["score"] == 0.0
+
+
+def test_teres_major_and_minor_stay_distinct():
+    out = _grade("Redondo maior D", "redondo menor direito")
+    assert out["verdict"] == "incorreta"
+    assert out["score"] == 0.0
+
+
+def test_vastus_medial_and_lateral_stay_distinct():
+    out = _grade("Vasto medial D", "vasto lateral direito")
+    assert out["verdict"] == "incorreta"
+    assert out["score"] == 0.0
+
+
+def test_unequivocal_orbicular_spelling_is_accepted():
+    out = _grade("Orbicular da boca", "M. OBICULAR DA BOCA")
+    assert out["verdict"] == "correta"
+    assert out["score"] == 1.0
+
+
+def test_required_laterality_rejects_omission_and_swap():
+    omitted = _grade_mode("Coracobraquial D", "coracobraquial", "required")
+    swapped = _grade_mode("Coracobraquial D", "coracobraquial E", "required")
+    assert omitted["score"] == 0.0
+    assert swapped["score"] == 0.0
+    assert "lado" in omitted["justification"].lower() or "lateral" in omitted["justification"].lower()
+
+
+def test_default_laterality_still_tolerates_omission():
+    out = _grade("Coracobraquial D", "coracobraquial")
+    assert out["verdict"] == "correta"
+
+
+def test_unresolved_erasure_is_pending_not_wrong():
+    out = grade_practical_answer(
+        {
+            "number": 1,
+            "reading_confidence": "baixa",
+            "max_score": 1,
+            "has_erasure": True,
+            "answer_transcription": "",
+        },
+        {"expected_answer": "Peitoral maior", "max_score": 1},
+        "",
+        reading_confidence="baixa",
+    )
+    assert out["score"] is None
+    assert out["needs_human_review"] is True
+
+
+def test_grande_dorsal_matches_latissimus():
+    out = _grade("Latíssimo do dorso D", "Grande dorsal direito")
+    assert out["verdict"] == "correta"
+    assert out["score"] == 1.0
+
+
+def test_clear_replacement_after_erasure_is_graded_as_the_final_text():
+    out = _grade("Peitoral maior", "Deltoide")
+    assert out["verdict"] == "incorreta"
+    assert out["score"] == 0.0

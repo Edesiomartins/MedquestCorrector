@@ -13,6 +13,7 @@ class Exam(Base):
     name = Column(String, nullable=False)
     is_practical = Column(Boolean, nullable=False, default=False)
     layout_manifest_json = Column(Text, nullable=True)
+    grading_policy_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

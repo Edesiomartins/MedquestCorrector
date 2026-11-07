@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.core.config import settings
 from app.services.exam_grading_client import grade_discursive_answer, grade_practical_answer
@@ -22,7 +22,7 @@ from app.services.openrouter_vision_client import (
     transcribe_answer_batch,
     transcribe_answer_crop,
 )
-from app.services.vision.contact_sheet import ContactSheetItem, build_contact_sheets
+from app.services.identity.sheet_identity import is_generic_student_name, resolve_sheet_identity
 from app.services.pdf_page_renderer import render_pdf_to_images
 from app.services.vision.escalation import (
     Hypothesis,
@@ -42,7 +42,7 @@ CROP_DPI = DEFAULT_CROP_DPI
 # Abaixo desta menor dimensao o recorte ganha upscale 2x Lanczos.
 UPSCALE_CROP_BELOW_PX = 700
 # Faixa superior da pagina onde ficam nome, matricula e turma.
-HEADER_CROP_FRACTION = 0.22
+HEADER_CROP_FRACTION = 0.32
 # HTR V2 lê no máximo este número de questões por aluno/página.
 HTR_BATCH_MAX_QUESTIONS = 15
 
@@ -142,29 +142,45 @@ def analyze_discursive_exam_pdf(
                 )
             physical_page = physical_page_number
             student_data = extracted_page.get("student") or {}
-            detected_student_name = str(student_data.get("name") or "")
-            detected_registration = str(student_data.get("registration") or "")
-            detected_student_code = str(student_data.get("student_code") or "").strip() or _derive_student_code(
-                detected_student_name,
-                detected_registration,
+            detected_student_name = str(
+                student_data.get("handwritten_name")
+                or student_data.get("confirmed_name")
+                or student_data.get("name")
+                or ""
             )
+            if is_generic_student_name(detected_student_name):
+                detected_student_name = str(student_data.get("name") or detected_student_name)
+            detected_registration = str(
+                student_data.get("registration")
+                or student_data.get("registered_registration")
+                or ""
+            )
+            detected_student_code = str(student_data.get("sheet_key") or "").strip()
+            if not detected_student_code:
+                detected_student_code = str(student_data.get("student_code") or "").strip() or _derive_student_code(
+                    detected_student_name,
+                    detected_registration,
+                )
 
             page_questions = []
-            answers_by_number: dict[int, dict[str, Any]] = {}
+            seen_numbers: set[int] = set()
+            ordered_answers: list[dict[str, Any]] = []
             for answer in extracted_page.get("questions") or []:
                 qnum = int(answer.get("number") or 0)
                 if qnum <= 0:
                     warnings.append(f"Questão sem número válido na página {physical_page_number}.")
                     continue
-                if qnum in answers_by_number:
+                if qnum in seen_numbers:
                     warnings.append(
-                        f"Questão duplicada na leitura visual (Q{qnum}, página {physical_page_number}); mantendo primeira ocorrência."
+                        f"Questão repetida na página {physical_page_number} (Q{qnum}). "
+                        "Os dois registros foram preservados."
                     )
-                    continue
-                answers_by_number[qnum] = answer
+                    answer = {**answer, "duplicate_conflict": True}
+                seen_numbers.add(qnum)
+                ordered_answers.append(answer)
 
-            for qnum in sorted(answers_by_number.keys()):
-                question = answers_by_number[qnum]
+            for question in ordered_answers:
+                qnum = int(question.get("number") or 0)
                 grade = _missing_rubric_grade(question)
                 question_rubric = rubric_map.get(qnum) or (rubric if rubric and not rubric_map else None)
                 correlation_id = (
@@ -507,10 +523,10 @@ def _missing_rubric_grade(question: dict) -> dict:
 def _grading_error(question: dict, error: str) -> dict:
     return {
         "question_number": int(question.get("number") or 0),
-        "score": 0.0,
+        "score": None,
         "max_score": None,
-        "verdict": "ilegivel" if question.get("reading_confidence") == "baixa" else "incorreta",
-        "justification": "Falha técnica na correção textual automática.",
+        "verdict": "revisao_pendente",
+        "justification": "Falha técnica na correção. A nota não foi zerada.",
         "detected_concepts": [],
         "missing_concepts": [],
         "needs_human_review": True,
@@ -762,6 +778,11 @@ def _read_page_whole(
     """
     normalized_image = normalize_page_image(page_image)
     crop_info = maybe_crop_answer_regions(normalized_image)
+    region_paths = [
+        str(region.get("image_path"))
+        for region in (crop_info.get("regions") or [])
+        if isinstance(region, dict) and region.get("image_path")
+    ]
 
     return extract_answers_from_page_image(
         normalized_image,
@@ -771,7 +792,7 @@ def _read_page_whole(
             # Transcrição é CEGA: nunca enviar gabarito/critérios para a etapa de
             # visão (docs/HTR_PLANO_EXECUCAO.md, item P0-A).
             "question_outline": _question_outline_for_transcription(rubric),
-            "detected_answer_regions": len(crop_info.get("regions") or []),
+            "answer_region_paths": region_paths,
         },
     )
 
@@ -1073,27 +1094,8 @@ def _identify_page(
     crop_dir: Path,
     warnings: list[str],
 ) -> dict:
-    """Identidade da página: QR primeiro, cabeçalho só se o QR falhar.
-
-    O QR carrega `MQPC|exam_id|student_id|page|total` e é conferível; extrair o
-    número do aluno com regex sobre o nome lido pelo modelo é adivinhação quando
-    existe um QR impresso na mesma página.
-
-    Quando o QR resolve o aluno **e** a lista de alunos da prova está à mão, a
-    chamada de leitura de cabeçalho não acontece: o nome já está no banco, e
-    pedi-lo ao modelo custaria uma chamada por página para descobrir o que já se
-    sabe. Só se cai no cabeçalho quando o QR falha ou aponta para alguém fora da
-    lista.
-    """
-    identity: dict[str, Any] = {
-        "name": "",
-        "registration": "",
-        "class": "",
-        "student_code": "",
-        "qr_student_id": "",
-        "identity_source": "unknown",
-    }
-
+    """QR confere o cadastro. Manifesto não escolhe o aluno. Nome genérico não esconde o manuscrito."""
+    payload = None
     try:
         with Image.open(page_image) as page:
             payload = decode_sheet_qr(page)
@@ -1101,44 +1103,56 @@ def _identify_page(
         logger.warning("Falha ao decodificar QR da página %d: %s", physical_page_number, exc)
         payload = None
 
-    if payload is not None:
-        identity["qr_student_id"] = payload.student_id
-        identity["identity_source"] = "qr"
-    elif manifest_page is not None and manifest_page.student_id:
-        identity["qr_student_id"] = manifest_page.student_id
-        identity["identity_source"] = "manifest"
+    manifest_student_id = str(getattr(manifest_page, "student_id", "") or "")
+    roster = options.get("students_by_id") if isinstance(options.get("students_by_id"), dict) else {}
+    expected_exam_id = str(options.get("exam_id") or "")
+    qr_student_id = payload.student_id if payload is not None else ""
+    qr_exam_id = payload.exam_id if payload is not None else ""
+    known = roster.get(str(qr_student_id)) if qr_student_id and (not expected_exam_id or qr_exam_id == expected_exam_id) else None
+    registered_name = str((known or {}).get("name") or "") if isinstance(known, dict) else ""
+    need_header = not (isinstance(known, dict) and registered_name and not is_generic_student_name(registered_name))
 
-    known = _student_from_roster(options, identity["qr_student_id"])
-    if known is not None:
-        identity.update(known)
-        logger.info(
-            "Página %d identificada pelo %s; leitura de cabeçalho dispensada.",
-            physical_page_number,
-            identity["identity_source"],
-        )
-        return identity
+    header: dict[str, Any] = {}
+    if need_header:
+        header_path = _save_header_crop(page_image, crop_dir, physical_page_number)
+        if header_path and options.get("read_header", True):
+            try:
+                header = read_sheet_header(header_path, vision_model=options.get("vision_model"))
+            except Exception as exc:
+                message = f"Leitura do cabeçalho falhou na página {physical_page_number}: {exc}"
+                logger.warning(message)
+                warnings.append(message)
 
-    # O QR não resolveu: o nome legível tem de vir do cabeçalho.
-    header_path = _save_header_crop(page_image, crop_dir, physical_page_number)
-    if header_path:
-        try:
-            header = read_sheet_header(header_path, vision_model=options.get("vision_model"))
-            identity.update(
-                {
-                    "name": header.get("name") or "",
-                    "registration": header.get("registration") or "",
-                    "class": header.get("class") or "",
-                    "student_code": header.get("student_code") or "",
-                }
-            )
-            if identity["identity_source"] == "unknown":
-                identity["identity_source"] = "header_ocr"
-        except Exception as exc:
-            message = f"Leitura do cabeçalho falhou na página {physical_page_number}: {exc}"
-            logger.warning(message)
-            warnings.append(message)
+    identity = resolve_sheet_identity(
+        physical_page=physical_page_number,
+        qr_exam_id=qr_exam_id,
+        qr_student_id=qr_student_id,
+        qr_page_in_student=payload.page_in_student if payload is not None else None,
+        expected_exam_id=expected_exam_id or None,
+        roster=roster,
+        manifest_student_id=manifest_student_id,
+        header=header,
+    )
+    for conflict in identity.conflicts:
+        if conflict not in warnings:
+            warnings.append(f"Página {physical_page_number}: {conflict}")
 
-    return identity
+    return {
+        "name": identity.display_name,
+        "registration": identity.registered_registration or identity.detected_registration,
+        "class": identity.class_name,
+        "student_code": identity.sheet_key,
+        "sheet_key": identity.sheet_key,
+        "registered_name": identity.registered_name,
+        "handwritten_name": identity.handwritten_name,
+        "confirmed_name": identity.confirmed_name,
+        "printed_label": identity.printed_label,
+        "identity_source": identity.identity_source,
+        "conflicts": identity.conflicts,
+        "uncertain": identity.uncertain,
+        "student_id": identity.student_id or "",
+        "qr_student_id": str(qr_student_id or ""),
+    }
 
 
 def _student_from_roster(options: dict, student_id: str) -> dict[str, str] | None:
@@ -1172,11 +1186,12 @@ def _save_header_crop(page_image: str, crop_dir: Path, physical_page_number: int
     """Recorta a faixa superior da página, onde ficam nome, matrícula e turma."""
     try:
         with Image.open(page_image) as page:
-            height = int(page.height * HEADER_CROP_FRACTION)
-            header = page.convert("RGB").crop((0, 0, page.width, max(1, height)))
+            oriented = ImageOps.exif_transpose(page) or page
+            height = max(1, int(oriented.height * HEADER_CROP_FRACTION))
+            header = oriented.convert("RGB").crop((0, 0, oriented.width, height))
         crop_dir.mkdir(parents=True, exist_ok=True)
         path = crop_dir / f"p{physical_page_number:03d}_header.png"
-        normalize_for_reading(header).save(path, format="PNG", optimize=True)
+        header.save(path, format="PNG")
         return str(path)
     except Exception as exc:
         logger.warning("Falha ao recortar cabeçalho da página %d: %s", physical_page_number, exc)
@@ -1214,6 +1229,10 @@ def _failed_reading_question(
     }
 
 
+def _reading_text(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
 def _maybe_selective_discursive_escalation(
     questions: list[dict[str, Any]],
     *,
@@ -1230,7 +1249,7 @@ def _maybe_selective_discursive_escalation(
             settings.HTR_DISCURSIVE_SELECTIVE_ESCALATION_ENABLED,
         )
     )
-    if not enabled or options.get("is_practical"):
+    if not enabled or bool(options.get("is_practical")):
         return questions
 
     max_per_page = int(
@@ -1293,19 +1312,22 @@ def _maybe_selective_discursive_escalation(
         question["escalated"] = True
         question["escalation_model"] = model
         question["escalation_failed"] = False
+        retry_text = str(retry.get("answer_transcription") or "")
         question["alternative_readings"] = list(question.get("alternative_readings") or []) + [
             {
-                "text": original_reading.get("answer_transcription") or "",
-                "source": original_reading.get("model_used") or "original",
+                "text": retry_text,
+                "source": retry.get("model_used") or model,
+                "reason": "releitura_seletiva",
             }
         ]
-        question["answer_transcription"] = str(retry.get("answer_transcription") or "")
-        question["reading_confidence"] = retry.get("reading_confidence") or question.get("reading_confidence")
-        question["reading_notes"] = str(retry.get("reading_notes") or question.get("reading_notes") or "")
-        question["has_erasure"] = bool(retry.get("has_erasure", False))
-        question["erased_text"] = str(retry.get("erased_text") or "")
-        question["has_answer"] = bool(retry.get("has_answer", bool(question["answer_transcription"].strip())))
-        question["model_used"] = retry.get("model_used") or model
+        if _reading_text(retry_text) != _reading_text(original_reading.get("answer_transcription")):
+            question["reading_confidence"] = "baixa"
+            note = "Releitura discordante. A primeira transcrição foi mantida."
+            question["reading_notes"] = " ".join(
+                part for part in (question.get("reading_notes") or "", note) if part
+            ).strip()
+            warnings.append(f"Página {physical_page_number}, questão {question.get('number')}: {note}")
+        question["model_used"] = question.get("model_used") or retry.get("model_used") or model
     return questions
 
 
@@ -1329,7 +1351,15 @@ def _maybe_escalate(
     Ver docs/HTR_PLANO_EXECUCAO.md, itens 8 e 12.
     """
     enabled = bool(options.get("escalate_low_confidence", settings.HTR_ESCALATION_ENABLED))
-    if not should_escalate(question.get("reading_confidence"), enabled=enabled):
+    text = str(question.get("answer_transcription") or "")
+    doubtful = (
+        str(question.get("reading_confidence") or "").lower() == "baixa"
+        or bool(question.get("has_erasure"))
+        or "[?]" in text
+        or "[ilegível]" in text.casefold()
+        or "[ilegivel]" in text.casefold()
+    )
+    if not enabled or not doubtful:
         return question
 
     qnum = int(question.get("number") or 0)
@@ -1382,6 +1412,18 @@ def _maybe_escalate(
         return question
 
     consensus = pick_consensus(hypotheses)
+    original_text = str(question.get("answer_transcription") or "")
+    chosen = consensus.text
+    alternatives = list(consensus.alternatives)
+    if consensus.needs_human and _reading_text(chosen) != _reading_text(original_text):
+        if chosen and chosen not in alternatives:
+            alternatives.append(chosen)
+        chosen = original_text
+        consensus_reason = (
+            f"{consensus.reason} A primeira transcrição foi mantida porque a releitura discordou."
+        )
+    else:
+        consensus_reason = consensus.reason
     logger.info(
         "Questão %s escalada: %d leituras, concordância CER %.3f -> confiança %s.",
         qnum,
@@ -1391,20 +1433,19 @@ def _maybe_escalate(
     )
     if consensus.needs_human:
         warnings.append(
-            f"Página {physical_page_number}, questão {qnum}: {consensus.reason}"
+            f"Página {physical_page_number}, questão {qnum}: {consensus_reason}"
         )
 
     return {
         **question,
-        "answer_transcription": consensus.text,
-        "has_answer": bool(consensus.text.strip()),
-        # A confiança passa a vir da concordância entre leituras independentes,
-        # não do autorrelato do modelo.
-        "reading_confidence": consensus.confidence,
+        "answer_transcription": chosen,
+        "has_answer": bool(str(chosen or "").strip()),
+        "reading_confidence": "baixa" if consensus.needs_human else consensus.confidence,
         "agreement_cer": round(consensus.agreement_cer, 4),
-        "alternative_readings": consensus.alternatives,
+        "alternative_readings": alternatives,
+        "original_reading": original_text,
         "escalated": True,
         "reading_notes": " ".join(
-            part for part in (question.get("reading_notes") or "", consensus.reason) if part
+            part for part in (question.get("reading_notes") or "", consensus_reason) if part
         ).strip(),
     }

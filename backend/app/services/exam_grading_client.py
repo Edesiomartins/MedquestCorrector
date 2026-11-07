@@ -12,11 +12,14 @@ import httpx
 from app.core.config import settings
 from app.services.grading.practical_match import (
     CORRECT,
+    LATERALITY_REQUIRED,
+    LATERALITY_TOLERATE_OMISSION,
     PENDING,
     expand_anatomy_abbreviations as _expand_anatomy_abbreviations,
     match_answer as _match_practical_answer,
     normalize_practical_answer as _normalize_practical_answer,
 )
+from app.services.grading.score_summary import points_from_fraction
 
 logger = logging.getLogger(__name__)
 REQUIRED_GRADING_KEYS = [
@@ -130,6 +133,25 @@ def grade_practical_answer(
             "model_used": "practical-rule-based",
         }
 
+    illegible = confidence == "baixa" or bool(question.get("reading_failed"))
+    unresolved_erasure = bool(question.get("has_erasure")) and (
+        not answer_raw or confidence == "baixa"
+    )
+    if unresolved_erasure or (not answer_raw and illegible):
+        return {
+            "question_number": qnum,
+            "score": None,
+            "max_score": max_score,
+            "verdict": "revisao_pendente",
+            "justification": "Rasura não resolvida ou leitura ilegível. A nota não foi zerada.",
+            "detected_concepts": [],
+            "missing_concepts": [expected_raw],
+            "needs_human_review": True,
+            "review_reason": "Rasura não resolvida ou trecho ilegível.",
+            "model_used": "practical-rule-based",
+            "expected_answer": expected_raw,
+        }
+
     if not answer_raw:
         return {
             "question_number": qnum,
@@ -139,12 +161,18 @@ def grade_practical_answer(
             "justification": f"Resposta em branco. Esperado: {expected_raw}.",
             "detected_concepts": [],
             "missing_concepts": [expected_raw],
-            "needs_human_review": confidence == "baixa",
-            "review_reason": "Leitura visual com baixa confiança." if confidence == "baixa" else "",
+            "needs_human_review": False,
+            "review_reason": "",
             "model_used": "practical-rule-based",
+            "expected_answer": expected_raw,
         }
 
-    match = _match_practical_answer(answer_raw, expected_raw)
+    laterality_mode = str(
+        question.get("laterality_mode") or rubric.get("laterality_mode") or LATERALITY_TOLERATE_OMISSION
+    )
+    if laterality_mode not in {LATERALITY_REQUIRED, LATERALITY_TOLERATE_OMISSION}:
+        laterality_mode = LATERALITY_TOLERATE_OMISSION
+    match = _match_practical_answer(answer_raw, expected_raw, laterality_mode=laterality_mode)
     is_correct = match.status == CORRECT
     is_pending = match.status == PENDING
 
@@ -200,6 +228,10 @@ _PRACTICAL_JUSTIFICATIONS = {
         "com uma estrutura mediana: {expected}. Revisão humana necessária."
     ),
     "nao_confere": "Resposta prática não confere com o gabarito esperado: {expected}.",
+    "lateralidade_omitida": (
+        "O gabarito exige o lado e a resposta não o informa. "
+        "Lado omitido não vale como resposta completa: {expected}."
+    ),
 }
 
 
@@ -365,14 +397,25 @@ def _normalize_grading_response(parsed: dict, question: dict, rubric: dict, raw:
         1.0,
     )
     raw_score = parsed.get("score", parsed.get("nota"))
-    score, invalid_grade = clamp_grade(raw_score)
-    score = max(0.0, min(score, max_score))
+    fraction, invalid_grade = clamp_grade(raw_score)
+    score = points_from_fraction(fraction, max_score)
+    if score is None:
+        invalid_grade = True
+        score = None
     confidence = str(question.get("reading_confidence") or "").lower()
     answer = str(question.get("answer_transcription") or "").strip()
     revisao_value, revisao_value_invalid = _coerce_revisao_necessaria(parsed.get("revisao_necessaria"))
     if revisao_value_invalid:
         schema_warnings.append("Campo revisao_necessaria com tipo/valor inválido.")
 
+    infrastructure_failure = bool(parsed.get("erro_parse"))
+    illegible = (
+        confidence == "baixa"
+        or "[ilegível]" in answer
+        or "[ilegivel]" in answer
+        or not answer
+        and confidence == "baixa"
+    )
     needs_review = (
         bool(parsed.get("needs_human_review", revisao_value))
         or confidence == "baixa"
@@ -380,8 +423,11 @@ def _normalize_grading_response(parsed: dict, question: dict, rubric: dict, raw:
         or invalid_grade
         or (not schema_valid)
         or revisao_value_invalid
+        or infrastructure_failure
     )
-    verdict = _normalize_verdict(parsed.get("verdict"), answer, confidence, score)
+    if infrastructure_failure or (illegible and not answer):
+        score = None
+    verdict = _normalize_verdict(parsed.get("verdict"), answer, confidence, score or 0.0)
     copied_statement = _looks_like_question_copy(question, rubric, answer)
     if copied_statement:
         score = 0.0
@@ -634,10 +680,10 @@ def _fallback_grade(
     )
     return {
         "question_number": qnum,
-        "score": 0.0,
+        "score": None,
         "max_score": max_score,
-        "verdict": "incorreta",
-        "justification": "Resposta da IA em formato inválido. Revisão manual necessária.",
+        "verdict": "revisao_pendente",
+        "justification": "Falha de leitura ou de infraestrutura. A nota não foi zerada.",
         "missing_concepts": [],
         "detected_concepts": [],
         "needs_human_review": force_review,

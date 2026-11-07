@@ -432,7 +432,7 @@ export default function VisualExamPage() {
 
         {warnings.length > 0 && !error && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            Análise concluída com avisos. Algumas questões precisam de revisão.
+            Leitura concluída com pendências. As páginas com aviso não contam como sucesso integral.
           </div>
         )}
 

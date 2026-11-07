@@ -6,6 +6,8 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 
+from app.services.grading.score_summary import summarize_scores
+
 
 def humanize_review_reason(
     warnings: list[str] | None,
@@ -28,6 +30,14 @@ def humanize_review_reason(
         return "Baixa confiança na leitura da resposta manuscrita."
     if "off-topic" in combined or "fora do tema" in combined:
         return "Resposta fora do tema da questão."
+    if "lateralidade" in combined or "lado" in combined:
+        return "Lado divergente ou omitido em relação ao gabarito."
+    if "rasura" in combined:
+        return "Rasura sem resposta final definida."
+    if "manifesto" in combined:
+        return "A ordem do arquivo não foi usada como identidade do aluno. Conferir a folha."
+    if "ilegív" in combined or "ilegiv" in combined:
+        return "Trecho ilegível. A nota não foi concluída."
     if combined.strip():
         return "Revisão manual recomendada."
     return ""
@@ -60,18 +70,69 @@ def _unique_sheet_title(registration: str, student_name: str, used_titles: set[s
     return candidate
 
 
+def _items_for_summary(r: dict, questions: list[dict]) -> list[dict]:
+    max_by_number = {}
+    for question in questions:
+        try:
+            max_by_number[int(question.get("number"))] = float(question.get("max_score") or 1)
+        except (TypeError, ValueError):
+            continue
+    details = list(r.get("question_details") or [])
+    numbers = []
+    for detail in details:
+        try:
+            numbers.append(int(detail.get("question_number")))
+        except (TypeError, ValueError):
+            continue
+    use_details = bool(details) and len(numbers) != len(set(numbers))
+    if use_details:
+        items = []
+        for detail in details:
+            try:
+                number = int(detail.get("question_number"))
+            except (TypeError, ValueError):
+                number = 0
+            score = detail.get("score")
+            items.append(
+                {
+                    "score": score,
+                    "max_score": detail.get("max_score") or max_by_number.get(number, 1),
+                    "pending": score is None or bool(detail.get("pending")),
+                }
+            )
+        return items
+    items = []
+    for number, score in (r.get("scores") or {}).items():
+        try:
+            question_number = int(number)
+        except (TypeError, ValueError):
+            question_number = 0
+        items.append(
+            {
+                "score": score,
+                "max_score": max_by_number.get(question_number, 1),
+                "pending": score is None,
+            }
+        )
+    return items
+
+
+def _summary_for_row(r: dict, questions: list[dict], *, round_final_to_quarter: bool) -> dict:
+    scale = r.get("scale_max")
+    return summarize_scores(
+        _items_for_summary(r, questions),
+        scale_max=float(scale) if isinstance(scale, (int, float)) else None,
+        round_to_quarter=round_final_to_quarter,
+    )
+
+
 def _final_score_for_row(
     r: dict,
     questions: list[dict],
     *,
     round_final_to_quarter: bool,
-) -> float:
-    scores = r.get("scores", {})
-    numeric_scores = [float(v) for v in scores.values() if isinstance(v, (int, float))]
-    final_score = sum(numeric_scores) / len(questions) if questions else 0.0
-    if round_final_to_quarter:
-        final_score = _round_quarter(final_score)
-    return final_score
+) -> float | None:
+    return _summary_for_row(r, questions, round_final_to_quarter=round_final_to_quarter)["final_score"]
 
 
 def export_results_xlsx(
@@ -118,7 +179,20 @@ def export_results_xlsx(
         if isinstance(q.get("number"), int) or str(q.get("number") or "").isdigit()
     }
 
-    headers = ["Matrícula", "Nome", "Curso", "Turma", "Nota final", "Revisão necessária", "Motivo da revisão"]
+    headers = [
+        "Matrícula",
+        "Nome",
+        "Curso",
+        "Turma",
+        "Nota final",
+        "Revisão necessária",
+        "Motivo da revisão",
+        "Pontos confirmados",
+        "Itens corrigidos",
+        "Pendências",
+        "Pontuação máxima",
+        "Status",
+    ]
 
     for col_idx, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_idx, value=h)
@@ -127,13 +201,23 @@ def export_results_xlsx(
         cell.alignment = center
         cell.border = thin_border
 
-    for row_idx, r in enumerate(results, 2):
+    ordered = sorted(
+        results,
+        key=lambda row: (
+            str(row.get("student_name") or "").casefold(),
+            str(row.get("student_name") or ""),
+            str(row.get("registration_number") or ""),
+            str(row.get("sheet_key") or ""),
+        ),
+    )
+    for row_idx, r in enumerate(ordered, 2):
         ws.cell(row=row_idx, column=1, value=r["registration_number"]).border = thin_border
         ws.cell(row=row_idx, column=2, value=r["student_name"]).border = thin_border
         ws.cell(row=row_idx, column=3, value=r.get("curso", "")).border = thin_border
         ws.cell(row=row_idx, column=4, value=r.get("turma", "")).border = thin_border
 
-        final_score = _final_score_for_row(r, questions, round_final_to_quarter=round_final_to_quarter)
+        summary = _summary_for_row(r, questions, round_final_to_quarter=round_final_to_quarter)
+        final_score = summary["final_score"]
         review_reason = humanize_review_reason(
             r.get("warnings") or [],
             r.get("technical_error") or r.get("observacoes") or "",
@@ -156,6 +240,17 @@ def export_results_xlsx(
 
         obs_cell = ws.cell(row=row_idx, column=total_col + 2, value=review_reason)
         obs_cell.border = thin_border
+        extra = [
+            summary["confirmed_points"],
+            summary["graded_count"],
+            summary["pending_count"],
+            summary["max_points"],
+            "concluída" if summary["status"] == "concluida" else "provisória",
+        ]
+        for offset, value in enumerate(extra, start=3):
+            cell = ws.cell(row=row_idx, column=total_col + offset, value=value)
+            cell.border = thin_border
+            cell.alignment = center
 
     ws.column_dimensions["A"].width = 14
     ws.column_dimensions["B"].width = 30
@@ -172,7 +267,7 @@ def export_results_xlsx(
     if include_details:
         used_titles = set(wb.sheetnames)
         used_titles.add("Revisões Necessárias")
-        for r in results:
+        for r in ordered:
             _add_student_sheet(
                 wb,
                 exam_name,

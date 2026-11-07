@@ -107,10 +107,12 @@ async def analyze_discursive_pdf(
                 stage="grading",
             ) from exc
 
+        policy = _exam_policy(exam)
         rubric_payload = {
             "exam_id": str(exam.id),
             "exam_name": exam.name,
             "is_practical": bool(exam.is_practical),
+            "laterality_mode": policy.get("laterality_mode"),
             "questions": [
                 {
                     "number": q.question_number,
@@ -118,6 +120,7 @@ async def analyze_discursive_pdf(
                     "max_score": q.max_score,
                     "expected_answer": q.expected_answer,
                     "correction_criteria": q.correction_criteria,
+                    "laterality_mode": policy.get("laterality_mode"),
                 }
                 for q in questions
             ],
@@ -151,6 +154,7 @@ async def analyze_discursive_pdf(
                 "text_model": text_model,
                 "process_pages": process_pages,
                 "run_id": str(run_id),
+                "exam_id": str(exam.id),
                 "is_practical": bool(exam.is_practical),
                 # Geometria da folha: habilita a leitura por recorte de caixa,
                 # com resolução muito maior na área de resposta. Sem manifesto,
@@ -162,6 +166,7 @@ async def analyze_discursive_pdf(
                 # Lista de alunos da prova. Com ela, uma página cujo QR é legível
                 # é identificada sem gastar chamada de modelo lendo o cabeçalho.
                 "students_by_id": _students_by_id(db, exam),
+                "read_header": True,
             },
         )
         raw_students = result.pop("_raw_students", [])
@@ -255,6 +260,10 @@ def _persist_visual_answers(db: Session, run_id: uuid.UUID, students: list[dict]
                     student_name=page.get("detected_student_name") or student.get("name") or None,
                     registration=page.get("detected_registration") or student.get("registration") or None,
                     detected_student_code=page.get("detected_student_code") or student.get("student_code") or None,
+                    handwritten_name=student.get("handwritten_name") or None,
+                    registered_name=student.get("registered_name") or None,
+                    confirmed_name=student.get("confirmed_name") or None,
+                    identity_source=student.get("identity_source") or None,
                     class_name=student.get("class") or None,
                     page_number=int(
                         page.get("physical_page")
@@ -266,6 +275,9 @@ def _persist_visual_answers(db: Session, run_id: uuid.UUID, students: list[dict]
                     question_number=int(question.get("number") or 0),
                     prompt_detected=question.get("prompt_detected") or None,
                     answer_transcription=question.get("extracted_answer") or question.get("answer_transcription") or None,
+                    original_transcription=question.get("original_reading")
+                    if isinstance(question.get("original_reading"), str)
+                    else (question.get("extracted_answer") or question.get("answer_transcription") or None),
                     reading_confidence=question.get("reading_confidence") or None,
                     ocr_confidence=(
                         float(question.get("ocr_confidence"))
@@ -331,6 +343,7 @@ def export_visual_run(
     run_id: uuid.UUID,
     include_details: bool = Query(default=True),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     request_id = str(uuid.uuid4())
     try:
@@ -348,6 +361,11 @@ def export_visual_run(
                     "request_id": request_id,
                 },
             )
+
+        from app.services.identity.sheet_identity import display_name, group_sheet_rows, same_account
+
+        if not same_account(run.user_id, current_user.id):
+            raise HTTPException(status_code=404, detail="Execução visual não encontrada.")
 
         answers = (
             db.query(VisualExamAnswer)
@@ -385,65 +403,89 @@ def export_visual_run(
             for qn in question_numbers
         ]
 
-        grouped: dict[str, dict] = {}
+        flat_rows = []
         for a in answers:
-            identity_key = (
-                (a.detected_student_code or "").strip()
-                or (a.registration or "").strip()
-                or (a.student_name or "").strip()
-                or f"pagina-{a.page_number}"
-            )
-            if identity_key not in grouped:
-                grouped[identity_key] = {
-                    "student_name": a.student_name or f"Aluno (pág. {a.page_number})",
-                    "registration_number": a.registration or (a.detected_student_code or f"P{a.page_number}"),
-                    "curso": "",
-                    "turma": a.class_name or "",
-                    "scores": {},
-                    "total": 0.0,
-                    "needs_review": False,
-                    "observacoes": [],
-                    "warnings": [],
-                    "identity_source": "",
-                    "question_details": [],
-                }
-
-            score_val = float(a.score) if a.score is not None else None
-            grouped[identity_key]["scores"][int(a.question_number)] = score_val
-            grouped[identity_key]["needs_review"] = (
-                grouped[identity_key]["needs_review"] or bool(a.needs_human_review)
-            )
-            if a.review_reason:
-                grouped[identity_key]["observacoes"].append(a.review_reason)
-            if a.review_reason:
-                grouped[identity_key]["warnings"].append(a.review_reason)
-            grouped[identity_key]["question_details"].append(
+            identity = _identity_payload(a)
+            flat_rows.append(
                 {
+                    "physical_page": a.page_number,
+                    "sheet_key": identity.get("sheet_key") or f"page:{a.page_number}",
                     "question_number": int(a.question_number),
-                    "score": score_val,
+                    "student_name": a.student_name,
+                    "handwritten_name": identity.get("handwritten_name") or a.student_name,
+                    "registered_name": identity.get("registered_name") or "",
+                    "confirmed_name": identity.get("confirmed_name") or "",
+                    "printed_label": identity.get("printed_label") or "",
+                    "registration_number": a.registration or "",
+                    "turma": a.class_name or "",
+                    "identity_source": identity.get("identity_source") or "",
+                    "uncertain": bool(identity.get("uncertain", True)),
+                    "student_id": identity.get("student_id") or "",
+                    "conflicts": identity.get("conflicts") or [],
+                    "score": a.score if not a.needs_human_review else None,
+                    "pending": bool(a.needs_human_review) or a.score is None,
+                    "needs_review": bool(a.needs_human_review),
+                    "review_reason": a.review_reason or "",
                     "verdict": a.verdict or "",
                     "comment": a.justification or "",
                     "expected_answer": expected_by_question.get(int(a.question_number), ""),
                     "transcription": a.answer_transcription or "",
-                    "needs_review": bool(a.needs_human_review),
-                    "review_reason": a.review_reason or "",
-                    "technical_detail": a.review_reason or "",
-                    "physical_page": a.page_number,
                     "transcription_confidence": a.ocr_confidence,
-                    "warnings": [a.review_reason] if a.review_reason else [],
+                    "max_score": a.max_score,
                 }
             )
-
-        for row in grouped.values():
-            row["total"] = float(
-                sum(score for score in row["scores"].values() if isinstance(score, (int, float)))
+        grouped_sheets = group_sheet_rows(flat_rows)
+        export_rows = []
+        for sheet in grouped_sheets:
+            scores: dict[int, float | None] = {}
+            details = []
+            for answer in sheet["answers"]:
+                number = int(answer["question_number"])
+                if number not in scores:
+                    scores[number] = answer.get("score")
+                details.append(
+                    {
+                        "question_number": number,
+                        "score": answer.get("score"),
+                        "pending": answer.get("pending"),
+                        "max_score": answer.get("max_score"),
+                        "verdict": answer.get("verdict") or "",
+                        "comment": answer.get("comment") or "",
+                        "expected_answer": answer.get("expected_answer") or "",
+                        "transcription": answer.get("transcription") or "",
+                        "needs_review": bool(answer.get("needs_review")),
+                        "review_reason": answer.get("review_reason") or "",
+                        "technical_detail": answer.get("review_reason") or "",
+                        "physical_page": answer.get("physical_page"),
+                        "transcription_confidence": answer.get("transcription_confidence"),
+                        "warnings": [answer.get("review_reason")] if answer.get("review_reason") else [],
+                    }
+                )
+            export_rows.append(
+                {
+                    "student_name": display_name(
+                        confirmed_name=sheet.get("confirmed_name"),
+                        handwritten_name=sheet.get("handwritten_name"),
+                        registered_name=sheet.get("registered_name"),
+                        printed_label=sheet.get("printed_label"),
+                        physical_page=sheet.get("physical_page"),
+                    ),
+                    "registration_number": sheet.get("registration_number") or "",
+                    "curso": "",
+                    "turma": sheet.get("turma") or "",
+                    "scores": scores,
+                    "needs_review": bool(sheet.get("needs_review") or sheet.get("conflicts")),
+                    "warnings": [*sheet.get("warnings", []), *sheet.get("conflicts", [])],
+                    "identity_source": sheet.get("identity_source") or "",
+                    "sheet_key": sheet.get("sheet_key") or "",
+                    "question_details": details,
+                }
             )
-            row["observacoes"] = "; ".join(row["observacoes"][:5])
 
         xlsx_bytes = export_results_xlsx(
             run.filename,
             questions,
-            list(grouped.values()),
+            list(export_rows),
             include_details=include_details,
         )
         safe_name = Path(run.filename).stem.replace('"', "").replace("'", "")
@@ -468,6 +510,41 @@ def export_visual_run(
                 "request_id": request_id,
             },
         ) from exc
+
+
+def _identity_payload(answer: VisualExamAnswer) -> dict:
+    student: dict = {}
+    if answer.raw_vision_json:
+        try:
+            parsed = json.loads(answer.raw_vision_json)
+        except json.JSONDecodeError:
+            parsed = {}
+        if isinstance(parsed, dict):
+            nested = parsed.get("student")
+            if isinstance(nested, dict):
+                student = nested
+    return {
+        "sheet_key": student.get("sheet_key") or f"page:{answer.page_number}",
+        "handwritten_name": student.get("handwritten_name") or getattr(answer, "handwritten_name", None) or "",
+        "registered_name": student.get("registered_name") or getattr(answer, "registered_name", None) or "",
+        "confirmed_name": student.get("confirmed_name") or getattr(answer, "confirmed_name", None) or "",
+        "printed_label": student.get("printed_label") or "",
+        "identity_source": student.get("identity_source") or "",
+        "uncertain": bool(student.get("uncertain", True)),
+        "student_id": student.get("student_id") or "",
+        "conflicts": student.get("conflicts") or [],
+    }
+
+
+def _exam_policy(exam: Exam) -> dict:
+    raw = getattr(exam, "grading_policy_json", None)
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _students_by_id(db: Session, exam: Exam) -> dict[str, dict[str, str]]:

@@ -279,14 +279,17 @@ def test_identity_prefers_the_qr_over_regex_on_the_name(sheet_pdf, spy_transcrib
     assert student["identity_source"] == "qr"
 
 
-def test_identity_falls_back_to_manifest_student_when_qr_unreadable(
+def test_unreadable_qr_does_not_adopt_the_manifest_student(
     sheet_pdf, spy_transcribe, stub_grading, monkeypatch
 ):
     monkeypatch.setattr(vep, "decode_sheet_qr", lambda _img: None)
 
     result = analyze_discursive_exam_pdf(str(sheet_pdf), RUBRIC, _options())
 
-    assert result["students"][0]["student"]["qr_student_id"] == "student-1"
+    student = result["students"][0]["student"]
+    assert student["qr_student_id"] == ""
+    assert student["student_id"] == ""
+    assert student["identity_source"] != "qr"
 
 
 def test_crops_survive_the_temp_dir_cleanup(sheet_pdf, spy_transcribe, stub_grading, tmp_path):

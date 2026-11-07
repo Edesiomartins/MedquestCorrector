@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from reportlab.lib.pagesizes import A4
 
 from app.core.celery_app import celery_app
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.storage import path_from_local_url, write_answer_crop
 from app.models.exam import Exam, ExamQuestion
@@ -64,8 +66,6 @@ def _effective_total(scores: list[QuestionScore]) -> float:
         if s.final_score is not None:
             total += float(s.final_score)
         elif not s.requires_manual_review:
-            total += float(s.ai_score or 0)
-        else:
             total += float(s.ai_score or 0)
     return total
 
@@ -128,9 +128,51 @@ IDENTITY_SOURCE_MANIFEST_FALLBACK = "manifest_fallback"
 IDENTITY_SOURCE_ANONYMOUS = "anonymous"
 
 
+def _exam_policy(exam: Any) -> dict[str, Any]:
+    raw = getattr(exam, "grading_policy_json", None)
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _try_header_student_uuid(_aligned_page_image: Any) -> UUID | None:
-    """Reservado para OCR do cabeçalho (nome/matrícula). Ainda não acoplado ao pipeline."""
+    """O cabeçalho manuscrito não produz UUID. A leitura do nome fica em `_read_header_fields`."""
     return None
+
+
+def _read_header_fields(aligned_page_image: Any, *, allow_remote: bool = False) -> dict[str, str]:
+    """Lê o cabeçalho quando a chamada remota está explicitamente ligada.
+
+    Sem a flag, não há chamada paga. O retorno vazio deixa a folha sem vínculo
+    automático em vez de copiar o aluno do manifesto.
+    """
+    if not allow_remote or not settings.OPENROUTER_API_KEY:
+        return {"name": "", "registration": "", "class": ""}
+    from app.services.openrouter_vision_client import read_sheet_header
+    from app.services.visual_exam_pipeline import _save_header_crop
+
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="header_") as temp_dir:
+            image_path = Path(temp_dir) / "page.png"
+            aligned_page_image.save(image_path, format="PNG")
+            header_path = _save_header_crop(str(image_path), Path(temp_dir), 1)
+            if not header_path:
+                return {"name": "", "registration": "", "class": ""}
+            header = read_sheet_header(header_path)
+            return {
+                "name": str(header.get("name") or ""),
+                "registration": str(header.get("registration") or ""),
+                "class": str(header.get("class") or ""),
+            }
+    except Exception as exc:
+        logger.warning("Leitura remota de cabeçalho indisponível: %s", exc)
+        return {"name": "", "registration": "", "class": ""}
 
 
 def _safe_uuid(raw: str | UUID | None) -> UUID | None:
@@ -153,8 +195,8 @@ def _pick_student_identity(
     """
     Identidade do aluno nesta página física do PDF enviado.
 
-    O manifest define apenas layout/crops (coordenadas); quando há folha fora de ordem,
-    quem manda na identidade é o QR da própria página (ou fallback fraco pelo manifest).
+    O manifesto não escolhe o aluno: a ordem de geração não é a ordem do scan.
+    QR só vale se o exam_id conferir. Sem QR, a folha fica sem vínculo automático.
     """
     warnings: list[str] = []
     manifest_uuid = _safe_uuid(manifest_student)
@@ -162,16 +204,22 @@ def _pick_student_identity(
     qr_exam = qr.exam_id if qr else None
     qr_exam_matches = str(qr_exam) == str(exam_id_str) if qr_exam else False
 
+    if manifest_uuid is not None:
+        warnings.append(
+            "Manifesto ignorado como identidade: a posição da página digitalizada "
+            f"não define o aluno (manifest_student={manifest_student})."
+        )
+
     if qr_uuid is not None and qr_exam_matches:
         if manifest_uuid is not None and manifest_uuid != qr_uuid:
-            warnings.append("QR e manifest discordam. Usando QR.")
+            warnings.append("QR e manifesto discordam. O vínculo usa o QR; o manifesto fica só como evidência.")
             logger.warning(
-                "[student-link] QR e manifest discordam — usando QR (manifest=%s, QR=%s).",
+                "[student-link] QR e manifesto discordam — usando QR (manifest=%s, QR=%s).",
                 manifest_uuid,
                 qr_uuid,
             )
         if header_uuid is not None and header_uuid != qr_uuid:
-            warnings.append("QR e cabeçalho discordam. Usando QR.")
+            warnings.append("QR e cabeçalho discordam. Usando QR e mantendo a folha em revisão.")
         return qr_uuid, IDENTITY_SOURCE_QR, warnings
 
     if qr_uuid is not None and not qr_exam_matches:
@@ -184,25 +232,9 @@ def _pick_student_identity(
         )
 
     if header_uuid is not None:
-        if manifest_uuid is not None and manifest_uuid != header_uuid:
-            warnings.append("Cabeçalho e manifest discordam. Usando cabeçalho.")
-            logger.warning(
-                "[student-link] Cabeçalho e manifest discordam — usando cabeçalho (manifest=%s, header=%s).",
-                manifest_uuid,
-                header_uuid,
-            )
         return header_uuid, IDENTITY_SOURCE_HEADER_OCR, warnings
 
-    if manifest_uuid is not None:
-        warnings.append("Identidade via manifest_fallback. Conferir manualmente.")
-        logger.warning(
-            "[student-link] Identidade via manifest (fallback fraco): PDF sem QR legível — "
-            "ordem das páginas pode não coincidir com o manifest. student=%s",
-            manifest_student,
-        )
-        return manifest_uuid, IDENTITY_SOURCE_MANIFEST_FALLBACK, warnings
-
-    warnings.append("Nenhuma identidade confiável encontrada.")
+    warnings.append("Nenhuma identidade conferida. A folha permanece sem vínculo automático.")
     return None, IDENTITY_SOURCE_ANONYMOUS, warnings
 
 
@@ -403,9 +435,38 @@ def process_upload_batch(self, batch_id: str):
                 )
                 parse_ok = True
             else:
-                grade_tuple = _run_async(TextGradingService.grade_single_question(ocr_result.text, spec))
-                grade = grade_tuple[0]
-                parse_ok = grade_tuple[1]
+                if getattr(exam, "is_practical", False):
+                    from app.services.exam_grading_client import grade_practical_answer
+
+                    policy = _exam_policy(exam)
+                    graded = grade_practical_answer(
+                        {
+                            "number": eq.question_number,
+                            "max_score": eq.max_score,
+                            "laterality_mode": policy.get("laterality_mode"),
+                            "reading_confidence": "media",
+                        },
+                        {
+                            "expected_answer": eq.expected_answer,
+                            "max_score": eq.max_score,
+                            "laterality_mode": policy.get("laterality_mode"),
+                        },
+                        ocr_result.text or "",
+                    )
+                    pending_grade = graded.get("score") is None
+                    grade = SingleQuestionGrade(
+                        question_number=eq.question_number,
+                        score=0.0 if pending_grade else float(graded.get("score") or 0),
+                        justification=str(graded.get("justification") or ""),
+                        grading_confidence=0.0 if pending_grade else 1.0,
+                        manual_review_required=bool(graded.get("needs_human_review") or pending_grade),
+                        manual_review_reason=graded.get("review_reason") or None,
+                    )
+                    parse_ok = True
+                else:
+                    grade_tuple = _run_async(TextGradingService.grade_single_question(ocr_result.text, spec))
+                    grade = grade_tuple[0]
+                    parse_ok = grade_tuple[1]
 
             should_try_visual = (
                 ocr_result.error_message is not None
@@ -505,8 +566,12 @@ def process_upload_batch(self, batch_id: str):
             qr_payload = decode_sheet_qr(aligned_img)
             manifest_student = manifest_page.student_id if manifest_page else None
             header_uuid = _try_header_student_uuid(aligned_img)
-            detected_student_name = None
-            detected_registration = None
+            header_fields = _read_header_fields(
+                aligned_img,
+                allow_remote=bool(settings.HEADER_REMOTE_READ_ENABLED),
+            )
+            detected_student_name = header_fields.get("name") or None
+            detected_registration = header_fields.get("registration") or None
 
             student_uuid, identity_source, identity_warnings = _pick_student_identity(
                 qr_payload,
@@ -514,6 +579,8 @@ def process_upload_batch(self, batch_id: str):
                 manifest_student,
                 exam_id_str,
             )
+            if detected_student_name or detected_registration:
+                identity_warnings.append("Nome ou matrícula lidos no cabeçalho da folha.")
 
             logger.warning("=== DEBUG STUDENT PAGE MAP ===")
             logger.warning("physical_page: %s", physical_page_number)
@@ -577,12 +644,30 @@ def process_upload_batch(self, batch_id: str):
                         .first()
                     ):
                         logger.warning(
-                            "[batch=%s] Página %d repetiu a questão %d para o mesmo aluno; ignorando duplicata.",
+                            "[batch=%s] Página %d repetiu a questão %d. "
+                            "A resposta anterior foi preservada numa folha separada.",
                             batch_id,
                             physical_page_number,
                             qnum,
                         )
-                        continue
+                        conflict = StudentResult(
+                            batch_id=batch.id,
+                            student_id=None,
+                            page_number=physical_page_number,
+                            physical_page=physical_page_number,
+                            status=ResultStatus.PENDING,
+                            identity_source="conflict",
+                            detected_student_name=detected_student_name,
+                            detected_registration=detected_registration,
+                            warnings_json=[
+                                f"Questão {qnum} repetida para o mesmo vínculo. Registros originais preservados."
+                            ],
+                        )
+                        db.add(conflict)
+                        db.flush()
+                        target_result = conflict
+                    else:
+                        target_result = sr
                     crop = crop_box_from_image(aligned_img, box, PAGE_H_PT, PIPELINE_DPI)
                     crop_bytes = image_to_png_bytes(crop)
                     # Grava o recorte de verdade. Antes daqui `answer_crop_path`
@@ -618,7 +703,7 @@ def process_upload_batch(self, batch_id: str):
                     )
 
                     qs = process_crop_for_question(
-                        sr=sr,
+                        sr=target_result,
                         eq=eq,
                         crop_bytes=crop_bytes,
                         physical_page_one_based=physical_page_number,

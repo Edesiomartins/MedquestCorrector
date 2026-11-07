@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     HTR_DISCURSIVE_SELECTIVE_ESCALATION_ENABLED: bool = False
     HTR_DISCURSIVE_ESCALATION_MODEL: str = "openai/gpt-5.6-sol"
     HTR_DISCURSIVE_ESCALATION_MAX_PER_PAGE: int = 3
+    # Leitura remota do cabeçalho no worker. Desligada: cada página seria uma
+    # chamada paga. Ligue só no lote que precisa do nome manuscrito.
+    HEADER_REMOTE_READ_ENABLED: bool = False
 
     # Importação universal de provas discursivas externas. Mantida atrás de flag
     # para permitir rollout e rollback sem tocar no fluxo de provas práticas.

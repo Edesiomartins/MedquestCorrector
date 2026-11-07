@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -15,7 +16,7 @@ from app.models.exam import Exam, ExamQuestion
 from app.models.grading import QuestionScore, ResultStatus, StudentResult
 from app.models.pipeline import BatchStatus, UploadBatch
 from app.models.student import Student
-from app.models.user import Class
+from app.models.user import Class, User
 from app.schemas.review import (
     BatchResultsResponse,
     BatchResultsStats,
@@ -24,6 +25,7 @@ from app.schemas.review import (
     UpdateScore,
 )
 from app.services.export.spreadsheet import export_results_xlsx
+from app.services.identity.sheet_identity import display_name, same_account
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 logger = logging.getLogger(__name__)
@@ -62,9 +64,11 @@ def _structured_http_error(*, status_code: int, code: str, message: str, detail:
     )
 
 
-def _effective_question_score(s: QuestionScore) -> float:
+def _effective_question_score(s: QuestionScore) -> float | None:
     if s.final_score is not None:
         return float(s.final_score)
+    if s.requires_manual_review:
+        return None
     return float(s.ai_score or 0)
 
 
@@ -132,7 +136,10 @@ def list_batch_results(batch_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.get("/next", response_model=StudentResultDetail)
-def get_next_pending(db: Session = Depends(get_db)):
+def get_next_pending(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Próximo aluno com ao menos uma questão ainda marcada para revisão manual."""
     row = (
         db.query(StudentResult)
@@ -142,6 +149,7 @@ def get_next_pending(db: Session = Depends(get_db)):
             QuestionScore.requires_manual_review.is_(True),
             StudentResult.status != ResultStatus.REVIEWED,
             StudentResult.status != ResultStatus.AUTO_APPROVED,
+            (UploadBatch.user_id == current_user.id) | (UploadBatch.user_id.is_(None)),
         )
         .order_by(UploadBatch.created_at.desc(), StudentResult.page_number)
         .first()
@@ -192,6 +200,9 @@ def update_score(
     # sobrescrita — é o par (recorte, leitura do modelo, leitura humana), o dado
     # mais caro deste domínio, colhido sem esforço adicional.
     # Ver docs/HTR_PLANO_EXECUCAO.md, item 13.
+    previous_text = qs.extracted_answer_text or ""
+    incoming_text = payload.extracted_answer_text
+    transcription_changed = incoming_text is not None and incoming_text != previous_text
     if payload.extracted_answer_text is not None:
         if exam_id is not None:
             record_review(
@@ -211,10 +222,19 @@ def update_score(
         qs.extracted_answer_text = payload.extracted_answer_text or None
         qs.transcription_edited_by_human = True
 
-    qs.final_score = payload.final_score
-    qs.professor_comment = payload.professor_comment
-    qs.requires_manual_review = False
-    qs.manual_review_reason = None
+    if transcription_changed and not payload.grade_confirmed:
+        qs.final_score = None
+        qs.requires_manual_review = True
+        qs.manual_review_reason = (
+            "Transcrição alterada. A nota anterior deixou de valer até nova confirmação."
+        )
+    else:
+        qs.final_score = payload.final_score
+        qs.professor_comment = payload.professor_comment
+        qs.requires_manual_review = False
+        qs.manual_review_reason = None
+    if not transcription_changed:
+        qs.professor_comment = payload.professor_comment
     db.commit()
 
     if sr:
@@ -223,8 +243,45 @@ def update_score(
     return {"status": "ok"}
 
 
+class IdentityCorrection(BaseModel):
+    confirmed_name: str | None = None
+    registration: str | None = None
+    clear_student_link: bool = False
+
+
+@router.post("/results/{result_id}/identity", status_code=status.HTTP_200_OK)
+def update_result_identity(
+    result_id: UUID,
+    payload: IdentityCorrection,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    sr = db.query(StudentResult).filter(StudentResult.id == result_id).first()
+    if not sr:
+        raise HTTPException(status_code=404, detail="Resultado não encontrado.")
+    batch = db.query(UploadBatch).filter(UploadBatch.id == sr.batch_id).first()
+    if batch is None or not same_account(batch.user_id, current_user.id):
+        raise HTTPException(status_code=404, detail="Resultado não encontrado.")
+    if payload.confirmed_name is not None:
+        sr.confirmed_name = payload.confirmed_name.strip() or None
+    if payload.registration is not None:
+        sr.detected_registration = payload.registration.strip() or None
+    if payload.clear_student_link:
+        sr.student_id = None
+        sr.identity_source = "human"
+    warnings = list(sr.warnings_json or [])
+    warnings.append("Identidade ajustada pelo professor.")
+    sr.warnings_json = warnings
+    db.commit()
+    return _build_detail(db, sr)
+
+
 @router.get("/scores/{score_id}/crop")
-def get_score_crop(score_id: UUID, db: Session = Depends(get_db)):
+def get_score_crop(
+    score_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Serve o recorte da caixa de resposta desta questão.
 
     Existe para que a tela de revisão mostre a imagem ao lado da transcrição.
@@ -233,6 +290,10 @@ def get_score_crop(score_id: UUID, db: Session = Depends(get_db)):
     """
     qs = db.query(QuestionScore).filter(QuestionScore.id == score_id).first()
     if not qs or not qs.answer_crop_path:
+        raise HTTPException(status_code=404, detail="Recorte não disponível para esta questão.")
+    sr = db.query(StudentResult).filter(StudentResult.id == qs.student_result_id).first()
+    batch = db.query(UploadBatch).filter(UploadBatch.id == sr.batch_id).first() if sr else None
+    if sr is None or batch is None or not same_account(batch.user_id, current_user.id):
         raise HTTPException(status_code=404, detail="Recorte não disponível para esta questão.")
 
     try:
@@ -352,10 +413,11 @@ def export_batch(
     batch_id: UUID,
     include_details: bool = Query(default=True),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     try:
         batch = db.query(UploadBatch).filter(UploadBatch.id == batch_id).first()
-        if not batch:
+        if not batch or not same_account(batch.user_id, current_user.id):
             raise HTTPException(
                 status_code=404,
                 detail={
@@ -442,7 +504,12 @@ def export_batch(
                     )
 
             rows.append({
-                "student_name": student.name if student else f"Aluno (pág. {sr.page_number})",
+                "student_name": display_name(
+                    confirmed_name=getattr(sr, "confirmed_name", None),
+                    handwritten_name=getattr(sr, "handwritten_name", None) or sr.detected_student_name,
+                    registered_name=student.name if student else None,
+                    physical_page=sr.physical_page or sr.page_number,
+                ),
                 "registration_number": student.registration_number if student else f"P{sr.page_number}",
                 "curso": student.curso if student else "",
                 "turma": turma_name,
@@ -517,16 +584,24 @@ def _build_detail(db: Session, sr: StudentResult) -> StudentResultDetail:
             )
     details.sort(key=lambda x: x.question_number)
 
+    shown_name = display_name(
+        confirmed_name=getattr(sr, "confirmed_name", None),
+        handwritten_name=getattr(sr, "handwritten_name", None) or sr.detected_student_name,
+        registered_name=student.name if student else None,
+        physical_page=sr.physical_page or sr.page_number,
+    )
     return StudentResultDetail(
         id=sr.id,
         batch_id=sr.batch_id,
-        student_name=student.name if student else None,
+        student_name=shown_name,
         registration_number=student.registration_number if student else None,
         page_number=sr.page_number,
         physical_page=sr.physical_page,
         identity_source=sr.identity_source,
         detected_student_name=sr.detected_student_name,
         detected_registration=sr.detected_registration,
+        handwritten_name=getattr(sr, "handwritten_name", None) or sr.detected_student_name,
+        confirmed_name=getattr(sr, "confirmed_name", None),
         warnings_json=sr.warnings_json or [],
         total_score=sr.total_score,
         status=sr.status.value,
@@ -534,7 +609,17 @@ def _build_detail(db: Session, sr: StudentResult) -> StudentResultDetail:
     )
 
 
+def _confirmed_points(scores: list[QuestionScore]) -> float:
+    total = 0.0
+    for score in scores:
+        if score.final_score is not None:
+            total += float(score.final_score)
+        elif not score.requires_manual_review:
+            total += float(score.ai_score or 0)
+    return total
+
+
 def _recalc_total(db: Session, sr: StudentResult) -> None:
     scores = db.query(QuestionScore).filter(QuestionScore.student_result_id == sr.id).all()
-    sr.total_score = sum(_effective_question_score(s) for s in scores)
+    sr.total_score = _confirmed_points(scores)
     db.commit()

@@ -71,6 +71,10 @@ QUALIFIER_GROUPS = {
     "lateral": "medial_lateral",
     "superior": "superior_inferior",
     "inferior": "superior_inferior",
+    # Tamanho relativo do mesmo músculo. "Redondo maior" e "redondo menor"
+    # não são grafias da mesma estrutura.
+    "maior": "maior_menor",
+    "menor": "maior_menor",
 }
 CRITICAL_QUALIFIERS = frozenset(QUALIFIER_GROUPS)
 
@@ -119,7 +123,20 @@ _ANATOMIC_SYNONYMS = (
     # hífen já virou espaço na limpeza de pontuação, daí o \s* no meio. O
     # prefixo "fronto" é obrigatório: "basilar" sozinho é outra artéria.
     (r"\bfronto\s*bas(?:ilar|al)\b", "frontobasilar"),
+    # "Coraco braquial" é a mesma grafia espaçada de coracobraquial.
+    (r"\bcoraco\s*braquial\b", "coracobraquial"),
+    # Erro ortográfico inequívoco de orbicular. Não aproxima outro músculo.
+    (r"\bobicular\b", "orbicular"),
 )
+
+# Núcleos que parecem próximos e precisam continuar separados. A lista é
+# explícita: distância de edição não decide este par.
+_MUTUALLY_EXCLUSIVE_CORES = (
+    frozenset({"latissimo", "longuissimo"}),
+)
+
+LATERALITY_TOLERATE_OMISSION = "tolerate_omission"
+LATERALITY_REQUIRED = "required"
 
 # Estruturas medianas, em que acrescentar lado é anatomicamente impossível.
 # Lista curta e explícita, comparada contra a chave "classe + núcleo +
@@ -222,7 +239,7 @@ def expected_answer_variants(expected: str) -> list[str]:
     aliases = re.findall(r"\(([^)]*)\)", expected)
     without_aliases = re.sub(r"\([^)]*\)", " ", expected)
 
-    parts = re.split(r"\s*(?:;|\||/|\n|, ou | ou )\s*", without_aliases)
+    parts = _split_answer_alternatives(without_aliases)
     variants = [normalize_practical_answer(part) for part in parts if str(part).strip()]
     for alias in aliases:
         normalized_alias = normalize_practical_answer(alias)
@@ -233,6 +250,25 @@ def expected_answer_variants(expected: str) -> list[str]:
     if normalized_full and normalized_full not in variants:
         variants.append(normalized_full)
     return [item for item in variants if item]
+
+
+def _split_answer_alternatives(text: str) -> list[str]:
+    """Separa alternativas reais. Barra entre duas palavras não é alternativa.
+
+    "Longuíssimo do tórax/dorso" nomeia o mesmo músculo (tórax e dorso).
+    Tratar a barra como "ou" fazia "dorso D" sozinho aceitar o latíssimo.
+    """
+    chunks = re.split(r"\s*(?:;|\||\n|, ou | ou )\s*", text)
+    expanded: list[str] = []
+    for chunk in chunks:
+        if "/" not in chunk:
+            expanded.append(chunk)
+            continue
+        if re.search(r"\s/\s", chunk):
+            expanded.extend(side.strip() for side in chunk.split("/") if side.strip())
+        else:
+            expanded.append(chunk.replace("/", " "))
+    return expanded
 
 
 def practical_similarity(answer_norm: str, expected_norm: str) -> float:
@@ -246,20 +282,32 @@ def practical_similarity(answer_norm: str, expected_norm: str) -> float:
     return (0.65 * ratio) + (0.35 * overlap)
 
 
-def match_answer(answer_raw: str, expected_raw: str) -> MatchResult:
+def match_answer(
+    answer_raw: str,
+    expected_raw: str,
+    *,
+    laterality_mode: str = LATERALITY_TOLERATE_OMISSION,
+) -> MatchResult:
     """Compara a resposta do aluno com cada variante aceita do gabarito."""
     answer_norm = normalize_practical_answer(answer_raw)
     variants = expected_answer_variants(expected_raw)
     if not answer_norm or not variants:
         return MatchResult(status=WRONG, reason="nao_confere", normalized_answer=answer_norm)
 
-    results = [_match_variant(answer_norm, variant) for variant in variants]
+    results = [
+        _match_variant(answer_norm, variant, laterality_mode=laterality_mode) for variant in variants
+    ]
     best = max(results, key=_result_rank)
     best.normalized_answer = answer_norm
     return best
 
 
-def _match_variant(answer_norm: str, expected_norm: str) -> MatchResult:
+def _match_variant(
+    answer_norm: str,
+    expected_norm: str,
+    *,
+    laterality_mode: str = LATERALITY_TOLERATE_OMISSION,
+) -> MatchResult:
     answer_class, answer_core, answer_qualifiers = _split_axes(answer_norm)
     expected_class, expected_core, expected_qualifiers = _split_axes(expected_norm)
     similarity = practical_similarity(answer_norm, expected_norm)
@@ -287,8 +335,15 @@ def _match_variant(answer_norm: str, expected_norm: str) -> MatchResult:
     # Sem núcleo (gabarito só com estrutura e lado), os dois eixos restantes decidem.
     core_hit = bool(matched) or not expected_core
 
-    if core_hit and not _laterality_compatible(answer_norm, expected_norm):
-        result.reason = "lateralidade"
+    if _exclusive_core_conflict(expected_core, answer_core):
+        result.reason = "estrutura"
+        return result
+
+    if core_hit and not _laterality_compatible(
+        answer_norm, expected_norm, laterality_mode=laterality_mode
+    ):
+        answer_lat = extract_laterality(answer_norm)
+        result.reason = "lateralidade_omitida" if not answer_lat else "lateralidade"
         return result
     if core_hit and expected_class and answer_class and answer_class != expected_class:
         result.reason = "estrutura"
@@ -421,12 +476,19 @@ def _split_axes(normalized: str) -> tuple[str, list[str], list[str]]:
 
 
 def _conflicting_qualifiers(expected: list[str], answer: list[str]) -> tuple[str, str] | None:
-    """Devolve o par contraditório, se houver, dentro de um mesmo eixo."""
-    answer_by_group = {QUALIFIER_GROUPS[token]: token for token in answer}
+    """Devolve o par contraditório, se houver, dentro de um mesmo eixo.
+
+    Uma resposta composta pode trazer os dois lados do eixo, como
+    "peitoral maior e redondo menor". Isso não é troca: o conflito só existe
+    quando um lado do eixo aparece sem o outro correspondente.
+    """
+    expected_set = set(expected)
+    answer_set = set(answer)
     for token in expected:
-        rival = answer_by_group.get(QUALIFIER_GROUPS[token])
-        if rival is not None and rival != token:
-            return (token, rival)
+        group = QUALIFIER_GROUPS[token]
+        for rival in answer_set:
+            if QUALIFIER_GROUPS[rival] == group and rival != token and rival not in expected_set:
+                return (token, rival)
     return None
 
 
@@ -471,13 +533,27 @@ def _edit_distance(first: str, second: str) -> int:
     return previous[-1]
 
 
-def _laterality_compatible(answer: str, expected: str) -> bool:
+def _exclusive_core_conflict(expected_core: list[str], answer_core: list[str]) -> bool:
+    expected = set(expected_core)
+    answer = set(answer_core)
+    for group in _MUTUALLY_EXCLUSIVE_CORES:
+        if (expected & group) and (answer & group) and (expected & group) != (answer & group):
+            return True
+    return False
+
+
+def _laterality_compatible(
+    answer: str,
+    expected: str,
+    *,
+    laterality_mode: str = LATERALITY_TOLERATE_OMISSION,
+) -> bool:
     expected_lat = extract_laterality(expected)
     if not expected_lat:
         return True
     answer_lat = extract_laterality(answer)
     if not answer_lat:
-        return True
+        return laterality_mode != LATERALITY_REQUIRED
     return answer_lat == expected_lat
 
 
